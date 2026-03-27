@@ -54,8 +54,9 @@ class User extends Authenticatable
 
     public function isAdmin()
     {
-        return $this->certificates()->whereHas('permissions', function($query) {
-            $query->where('slug', 'manage_system');
-        })->exists();
+        return $this->certificates()
+            ->where('can_access_hawcert', true)
+            ->where('is_active', true)
+            ->exists();
     }
 }

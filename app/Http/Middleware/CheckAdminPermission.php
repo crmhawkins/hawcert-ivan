@@ -23,12 +23,13 @@ class CheckAdminPermission
 
         // Si el usuario tiene sesión de qué certificado usó, podríamos chequearlo.
         // Pero es más robusto dejar que si ALGÚN certificado del usuario tiene el permiso, es admin.
-        $hasPermission = $user->certificates()->whereHas('permissions', function($query) {
-            $query->where('slug', 'manage_system');
-        })->exists();
+        $hasPermission = $user->certificates()
+            ->where('can_access_hawcert', true)
+            ->where('is_active', true)
+            ->exists();
 
         if (!$hasPermission) {
-            abort(403, 'No tienes permisos para realizar esta acción. Necesitas el permiso de administrador.');
+            abort(403, 'No tienes permisos para realizar esta acción.');
         }
 
         return $next($request);
