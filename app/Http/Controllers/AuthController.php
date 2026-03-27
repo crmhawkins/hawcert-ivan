@@ -27,19 +27,6 @@ class AuthController extends Controller
         $remember = $request->boolean('remember');
 
         if (Auth::attempt($credentials, $remember)) {
-            $user = Auth::user();
-            $hasAccess = $user->certificates()
-                ->where('can_access_hawcert', true)
-                ->where('is_active', true)
-                ->exists();
-
-            if (!$hasAccess) {
-                Auth::logout();
-                throw ValidationException::withMessages([
-                    'email' => __('Tu cuenta no tiene acceso al panel HawCert.'),
-                ]);
-            }
-
             $request->session()->regenerate();
             return redirect()->intended('/dashboard');
         }
@@ -109,12 +96,6 @@ class AuthController extends Controller
             
             throw ValidationException::withMessages([
                 'certificate_file' => $errorMessage,
-            ]);
-        }
-
-        if (!$certificate->can_access_hawcert) {
-            throw ValidationException::withMessages([
-                'certificate_file' => __('Este certificado no tiene acceso al panel HawCert.'),
             ]);
         }
 
