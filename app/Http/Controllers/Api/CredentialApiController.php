@@ -163,6 +163,7 @@ class CredentialApiController extends Controller
     private function respondWithSingleCredential(Request $request, Certificate $certificate, Credential $credential, string $currentUrl, ?string $clientIp)
     {
         $isCertificateOnly = $credential->isCertificateOnly();
+        $isCertificateFile = $credential->isCertificateFile();
 
         Log::info('✅ Credenciales obtenidas exitosamente', [
             'credential_id' => $credential->id,
@@ -187,9 +188,10 @@ class CredentialApiController extends Controller
             'id' => $credential->id,
             'website_name' => $credential->website_name,
             'certificate_only' => $isCertificateOnly,
+            'certificate_file' => $isCertificateFile,
         ];
 
-        if (!$isCertificateOnly) {
+        if (!$isCertificateOnly && !$isCertificateFile) {
             $payload['username_field_selector'] = $credential->username_field_selector;
             $payload['password_field_selector'] = $credential->password_field_selector;
             $payload['submit_button_selector'] = $credential->submit_button_selector;

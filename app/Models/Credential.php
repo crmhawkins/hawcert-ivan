@@ -11,6 +11,7 @@ class Credential extends Model
 {
     public const AUTH_TYPE_FORM = 'form';
     public const AUTH_TYPE_CERTIFICATE_ONLY = 'certificate_only';
+    public const AUTH_TYPE_CERTIFICATE_FILE = 'certificate_file';
 
     protected $fillable = [
         'user_id',
@@ -121,6 +122,11 @@ class Credential extends Model
     public function isCertificateOnly(): bool
     {
         return $this->auth_type === self::AUTH_TYPE_CERTIFICATE_ONLY;
+    }
+
+    public function isCertificateFile(): bool
+    {
+        return $this->auth_type === self::AUTH_TYPE_CERTIFICATE_FILE;
     }
 
     /**

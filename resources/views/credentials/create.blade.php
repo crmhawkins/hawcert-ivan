@@ -32,6 +32,10 @@
                         <input type="radio" name="auth_type" value="certificate_only" {{ old('auth_type') === 'certificate_only' ? 'checked' : '' }} class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
                         <span class="ml-2 text-sm text-gray-700 dark:text-gray-300">Solo certificado (sin formulario)</span>
                     </label>
+                    <label class="inline-flex items-center">
+                        <input type="radio" name="auth_type" value="certificate_file" {{ old('auth_type') === 'certificate_file' ? 'checked' : '' }} class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                        <span class="ml-2 text-sm text-gray-700 dark:text-gray-300">Adjuntar certificado (servicios propios)</span>
+                    </label>
                 </div>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">En "Solo certificado" la extensión indicará al usuario que seleccione el certificado cuando el navegador lo pida (todas estas webs usan el mismo certificado).</p>
             </div>

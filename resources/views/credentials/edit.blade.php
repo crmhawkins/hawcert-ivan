@@ -33,6 +33,10 @@
                         <input type="radio" name="auth_type" value="certificate_only" {{ old('auth_type', $credential->auth_type ?? 'form') === 'certificate_only' ? 'checked' : '' }} class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
                         <span class="ml-2 text-sm text-gray-700 dark:text-gray-300">Solo certificado (sin formulario)</span>
                     </label>
+                    <label class="inline-flex items-center">
+                        <input type="radio" name="auth_type" value="certificate_file" {{ old('auth_type', $credential->auth_type ?? 'form') === 'certificate_file' ? 'checked' : '' }} class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                        <span class="ml-2 text-sm text-gray-700 dark:text-gray-300">Adjuntar certificado (servicios propios)</span>
+                    </label>
                 </div>
             </div>
 
