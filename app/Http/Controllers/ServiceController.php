@@ -10,8 +10,20 @@ class ServiceController extends Controller
 {
     public function index()
     {
-        $services = Service::latest()->paginate(15);
-        return view('services.index', compact('services'));
+        $grouped = Service::with('certificates')
+            ->orderBy('name')
+            ->get()
+            ->groupBy(function ($service) {
+                // Agrupa por el dominio del endpoint si existe, o por nombre completo
+                if ($service->endpoint) {
+                    preg_match('/https?:\/\/(?:www\.)?([^\/\s]+)/', $service->endpoint, $matches);
+                    return $matches[1] ?? $service->name;
+                }
+                return $service->name;
+            })
+            ->sortKeys();
+
+        return view('services.index', compact('grouped'));
     }
 
     public function create()

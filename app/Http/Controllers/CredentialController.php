@@ -14,11 +14,14 @@ class CredentialController extends Controller
      */
     public function index()
     {
-        $credentials = Credential::with(['user', 'certificate'])
-            ->latest()
-            ->paginate(15);
-        
-        return view('credentials.index', compact('credentials'));
+        $grouped = Credential::with(['user', 'certificates'])
+            ->where('is_active', true)
+            ->orderBy('website_name')
+            ->get()
+            ->groupBy('website_name')
+            ->sortKeys();
+
+        return view('credentials.index', compact('grouped'));
     }
 
     /**

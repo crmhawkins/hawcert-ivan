@@ -77,6 +77,14 @@
     }
   }).observe(document, { subtree: true, childList: true });
 
+  // Mostrar overlay de protección si venimos de una navegación con credenciales
+  if (sessionStorage.getItem('hawcert-navigating')) {
+    showSecureOverlay();
+    window.addEventListener('load', function() {
+      setTimeout(removeSecureOverlay, 800);
+    });
+  }
+
   // Verificar y rellenar cuando la página carga
   // Dar tiempo al service worker para activarse
   if (document.readyState === 'loading') {
@@ -357,9 +365,11 @@
       <style>@keyframes hawcertSpin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }</style>
     `;
     document.body.appendChild(overlay);
+    sessionStorage.setItem('hawcert-navigating', '1');
   }
 
   function removeSecureOverlay() {
+    sessionStorage.removeItem('hawcert-navigating');
     const overlay = document.getElementById('hawcert-secure-overlay');
     if (overlay) {
        overlay.style.transition = 'opacity 0.3s';
@@ -574,10 +584,10 @@
          credential.password = '***WIPED***';
       }
       
-      // Retirada del overlay si falla la navegación web (fallback tras 3 segundos)
+      // Retirada del overlay si falla la navegación web (fallback tras 5 segundos)
       setTimeout(() => {
          removeSecureOverlay();
-      }, 3000);
+      }, 5000);
     }
   }
 
