@@ -463,13 +463,33 @@
   function fillFieldAndTrigger(field, value, label) {
     if (!field || value == null) return;
     field.focus();
-    field.value = value;
+
+    // Usar el setter nativo del prototipo para compatibilidad con React/Vue/Angular
+    // y con macOS Chrome que ignora la asignación directa en campos de contraseña
+    try {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        field.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype,
+        'value'
+      )?.set;
+      if (nativeSetter) {
+        nativeSetter.call(field, value);
+      } else {
+        field.value = value;
+      }
+    } catch (e) {
+      field.value = value;
+    }
+
     filledFields.add(field);
-    const events = ['input', 'change', 'keyup', 'keydown', 'focus', 'blur'];
-    events.forEach(eventType => {
-      field.dispatchEvent(new Event(eventType, { bubbles: true, cancelable: true }));
-    });
-    field.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true }));
+
+    // Disparar eventos en orden para que todos los frameworks detecten el cambio
+    field.dispatchEvent(new Event('focus',   { bubbles: true }));
+    field.dispatchEvent(new InputEvent('input',  { bubbles: true, cancelable: true, data: value }));
+    field.dispatchEvent(new Event('change',  { bubbles: true }));
+    field.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'End' }));
+    field.dispatchEvent(new KeyboardEvent('keyup',   { bubbles: true, key: 'End' }));
+    field.dispatchEvent(new Event('blur',    { bubbles: true }));
+
     log(label, 'rellenado, valor length=', value.length);
   }
 

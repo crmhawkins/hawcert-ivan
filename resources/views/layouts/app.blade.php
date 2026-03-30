@@ -13,7 +13,7 @@
                 <div class="flex">
                     <div class="flex-shrink-0 flex items-center">
                         <a href="{{ route('dashboard') }}" class="text-xl font-bold text-gray-900 dark:text-white">
-                            HawCert <span class="text-xs font-normal text-gray-500 ml-1">v0.9</span>
+                            HawCert <span class="text-xs font-normal text-gray-500 ml-1">v1.0</span>
                         </a>
                     </div>
                     <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
