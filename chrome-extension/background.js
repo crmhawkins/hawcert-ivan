@@ -20,18 +20,54 @@ chrome.runtime.onConnect.addListener((port) => {
   // Mantener conexión activa
 });
 
+// Caché temporal de credenciales seguras (indexadas por tab.id)
+const credentialCache = new Map();
+
 // Escuchar mensajes del content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Manejar mensajes de forma asíncrona
   if (request.action === 'getCredentials') {
-    getCredentials(request.url, request.manual === true, request.credential_id)
-      .then(data => {
-        sendResponse({ success: true, data });
+    getCredentials(request.url, request.manual === true)
+      .then(credentials => {
+        sendResponse({ success: true, credentials });
       })
       .catch(error => {
         sendResponse({ success: false, error: error.message });
       });
     return true; // Mantener el canal abierto para respuesta asíncrona
+  }
+
+  // Pre-comprobar credenciales guardándolas en el background y enviando solo metadatos al content.js
+  if (request.action === 'checkCredentials') {
+    getCredentials(request.url, false)
+      .then(credentials => {
+        const tabId = sender.tab ? sender.tab.id : 'unknown';
+        credentialCache.set(tabId, credentials);
+        
+        sendResponse({ 
+          success: true, 
+          websiteName: credentials.website_name,
+          certificateOnly: credentials.certificate_only
+        });
+      })
+      .catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  }
+
+  // Recupera las verdaderas credenciales cacheadas (Just-In-Time)
+  if (request.action === 'retrieveCachedCredentials') {
+    const tabId = sender.tab ? sender.tab.id : 'unknown';
+    const credentials = credentialCache.get(tabId);
+    
+    if (credentials) {
+      credentialCache.delete(tabId); // Limpiar inmediatamente
+      sendResponse({ success: true, credentials });
+    } else {
+      sendResponse({ success: false, error: 'Credenciales expiradas o no encontradas en caché segura' });
+    }
+    return true;
   }
   
   if (request.action === 'getConfig') {
@@ -64,9 +100,8 @@ function showCertificateOnlyNotification(websiteName) {
  * Obtiene credenciales desde la API de HawCert.
  * @param {string} url - URL actual
  * @param {boolean} manual - true si el usuario pulsó "Rellenar ahora" (solo entonces el servidor registra el uso en logs)
- * @param {number|null} credentialId - credencial concreta a devolver (selección manual)
  */
-async function getCredentials(url, manual = false, credentialId = null) {
+async function getCredentials(url, manual = false) {
   return new Promise((resolve, reject) => {
     chrome.storage.local.get(['config'], async (result) => {
       const config = result.config || DEFAULT_CONFIG;
@@ -91,7 +126,6 @@ async function getCredentials(url, manual = false, credentialId = null) {
             certificate: config.certificate,
             url: url,
             manual: !!manual,
-            credential_id: typeof credentialId === 'number' ? credentialId : undefined,
           }),
         });
 
@@ -102,7 +136,7 @@ async function getCredentials(url, manual = false, credentialId = null) {
           return;
         }
 
-        resolve(data);
+        resolve(data.credential);
       } catch (error) {
         reject(new Error(`Error de red: ${error.message}`));
       }

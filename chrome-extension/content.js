@@ -100,8 +100,8 @@
   });
 
   /**
-   * Verifica si hay credenciales para esta URL y las rellena.
-   * @param {boolean} manual - true si el usuario pulsó "Rellenar ahora" en la extensión (solo entonces se registra en logs del servidor)
+   * Verifica si hay credenciales para esta URL y las rellena (o pregunta).
+   * @param {boolean} manual - true si el usuario pulsó "Rellenar ahora" (salta la confirmación)
    */
   async function checkAndFill(manual = false) {
     if (isFilling) return false;
@@ -114,61 +114,162 @@
         return false;
       }
 
-      const response = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage(
-          { action: 'getCredentials', url: currentUrl, manual: !!manual },
-          (response) => {
-            if (chrome.runtime.lastError) {
-              const msg = chrome.runtime.lastError.message;
-              if (msg.includes('Receiving end does not exist') || msg.includes('message port closed')) {
-                reject(new Error('Service worker no disponible'));
-                return;
-              }
-              reject(new Error(msg));
-              return;
+      if (manual) {
+        // Flujo Manual: Obtenemos contraseñas directamente sin confirmación extra
+        const response = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage(
+            { action: 'getCredentials', url: currentUrl, manual: true },
+            (response) => {
+              if (chrome.runtime.lastError) resolve(null);
+              else resolve(response);
             }
-            resolve(response);
+          );
+        });
+
+        if (response && response.success && response.credentials) {
+          log('Credenciales manuales recibidas para', response.credentials.website_name);
+          return await fillCredentials(response.credentials);
+        }
+        return false;
+      }
+
+      // Flujo Automático: Just-In-Time (Comprobar -> Confirmar -> Obtener -> Inyectar)
+      const checkResponse = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+          { action: 'checkCredentials', url: currentUrl },
+          (response) => {
+            if (chrome.runtime.lastError) resolve(null);
+            else resolve(response);
           }
         );
       });
 
-      if (!response) {
-        log('Respuesta vacía del backend');
-        return false;
-      }
-      if (!response.success) {
-        log('Backend devolvió success=false', response.message || response);
+      if (!checkResponse || !checkResponse.success) {
         return false;
       }
 
-      // Aceptar formato nuevo (data.mode, data.credential) o legacy (credential/credentials en la raíz)
-      const data = response.data != null ? response.data : response;
-      if (data.mode === 'multiple') {
-        log('Hay múltiples credenciales para esta URL; se requiere selección manual en el popup.', {
-          count: (data.credentials || []).length,
+      if (checkResponse.certificateOnly) {
+        log('Página con autenticación solo por certificado');
+        chrome.runtime.sendMessage({
+          action: 'showCertificateOnlyNotification',
+          websiteName: checkResponse.websiteName || 'Esta página',
         });
-        return false;
+        return true;
       }
 
-      const cred = data.credential || response.credential || (Array.isArray(data.credentials) && data.credentials.length === 1 ? data.credentials[0] : null) || (response.credentials && !Array.isArray(response.credentials) ? response.credentials : null);
-      if (!cred || typeof cred !== 'object') {
-        log('No hay credencial en la respuesta', { hasData: !!data, keys: data ? Object.keys(data) : [] });
-        return false;
-      }
+      showConfirmationUI(checkResponse.websiteName);
+      return true;
 
-      log('Credenciales recibidas para', cred.website_name);
-      return await fillCredentials(cred);
     } catch (error) {
-      if (error.message && (
-        error.message.includes('Service worker no disponible') ||
-        error.message.includes('Receiving end does not exist') ||
-        error.message.includes('message port closed')
-      )) {
-        setTimeout(() => checkAndFill(), 1000);
-        return false;
-      }
-      logError('Error en checkAndFill', error.message, error);
+      logError('Error en checkAndFill', error);
       return false;
+    }
+  }
+
+  function showConfirmationUI(websiteName) {
+    if (document.getElementById('hawcert-shadow-host')) return;
+
+    const host = document.createElement('div');
+    host.id = 'hawcert-shadow-host';
+    host.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 2147483647; font-family: system-ui, -apple-system, sans-serif;';
+    document.body.appendChild(host);
+
+    const shadow = host.attachShadow({ mode: 'closed' });
+    
+    const container = document.createElement('div');
+    container.style.cssText = 'background: white; border: 1px solid #e5e7eb; border-radius: 8px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1); padding: 16px; width: 320px; color: #1f2937; animation: hawcertSlideIn 0.3s ease-out;';
+    
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight: 600; margin-bottom: 8px; font-size: 14px; display: flex; align-items: center; gap: 8px;';
+    title.innerHTML = '<span style="background: #2563eb; color: white; border-radius: 4px; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; font-weight: bold;">H</span> HawCert Auto-Fill';
+    
+    const msg = document.createElement('div');
+    msg.style.cssText = 'font-size: 13px; margin-bottom: 16px; line-height: 1.5; color: #4b5563;';
+    msg.textContent = `¿Acceder automáticamente a ${websiteName || 'esta web'}?`;
+
+    const btnContainer = document.createElement('div');
+    btnContainer.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end;';
+
+    const btnNo = document.createElement('button');
+    btnNo.textContent = 'No';
+    btnNo.style.cssText = 'padding: 6px 14px; border: 1px solid #d1d5db; background: #fff; color: #374151; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.2s;';
+    btnNo.onmouseover = () => btnNo.style.background = '#f3f4f6';
+    btnNo.onmouseout = () => btnNo.style.background = '#fff';
+    
+    const btnYes = document.createElement('button');
+    btnYes.textContent = 'Sí';
+    btnYes.style.cssText = 'padding: 6px 14px; border: none; background: #2563eb; color: white; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); transition: background 0.2s;';
+    btnYes.onmouseover = () => btnYes.style.background = '#1d4ed8';
+    btnYes.onmouseout = () => btnYes.style.background = '#2563eb';
+
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes hawcertSlideIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+      button:disabled { opacity: 0.7; cursor: not-allowed !important; }
+    `;
+
+    btnNo.onclick = () => host.remove();
+    
+    btnYes.onclick = async () => {
+      btnYes.textContent = 'Inyectando...';
+      btnYes.disabled = true;
+      btnNo.disabled = true;
+      showSecureOverlay();
+
+      try {
+        const response = await new Promise(resolve => {
+            chrome.runtime.sendMessage({ action: 'retrieveCachedCredentials' }, resolve);
+        });
+
+        if (response && response.success && response.credentials) {
+           host.remove();
+           await fillCredentials(response.credentials);
+        } else {
+           msg.textContent = 'Error: ' + (response?.error || 'No se pudieron recuperar las credenciales seguras');
+           msg.style.color = '#ef4444';
+           btnNo.textContent = 'Cerrar';
+           btnNo.disabled = false;
+           removeSecureOverlay();
+        }
+      } catch (e) {
+         msg.textContent = 'Error de conexión interna.';
+         btnNo.disabled = false;
+         removeSecureOverlay();
+      }
+    };
+
+    btnContainer.appendChild(btnNo);
+    btnContainer.appendChild(btnYes);
+    
+    container.appendChild(title);
+    container.appendChild(msg);
+    container.appendChild(btnContainer);
+    
+    shadow.appendChild(style);
+    shadow.appendChild(container);
+  }
+
+  function showSecureOverlay() {
+    if (document.getElementById('hawcert-secure-overlay')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'hawcert-secure-overlay';
+    // Se usa un z-index altísimo
+    overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(255, 255, 255, 0.95); z-index: 2147483646; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: system-ui, -apple-system, sans-serif; backdrop-filter: blur(8px);';
+    overlay.innerHTML = `
+      <div style="width: 48px; height: 48px; border: 4px solid #e5e7eb; border-top: 4px solid #2563eb; border-radius: 50%; animation: hawcertSpin 1s linear infinite;"></div>
+      <div style="margin-top: 24px; font-size: 20px; color: #111827; font-weight: 600;">HawCert</div>
+      <div style="margin-top: 8px; font-size: 15px; color: #4b5563;">Iniciando sesión de forma segura...</div>
+      <style>@keyframes hawcertSpin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }</style>
+    `;
+    document.body.appendChild(overlay);
+  }
+
+  function removeSecureOverlay() {
+    const overlay = document.getElementById('hawcert-secure-overlay');
+    if (overlay) {
+       overlay.style.transition = 'opacity 0.3s';
+       overlay.style.opacity = '0';
+       setTimeout(() => overlay.remove(), 300);
     }
   }
 
@@ -366,6 +467,17 @@
       return false;
     } finally {
       isFilling = false;
+      
+      // WIPE MEMORY: Destrucción de datos sensibles de la memoria RAM JIT
+      if (credential) {
+         credential.username = '***WIPED***';
+         credential.password = '***WIPED***';
+      }
+      
+      // Retirada del overlay si falla la navegación web (fallback tras 3 segundos)
+      setTimeout(() => {
+         removeSecureOverlay();
+      }, 3000);
     }
   }
 
@@ -439,42 +551,6 @@
           sendResponse({ success: false });
         });
       return true; // Mantener el canal abierto para respuesta asíncrona
-    }
-
-    if (request.action === 'fillWithCredentialId') {
-      const credentialId = Number(request.credential_id);
-      if (!Number.isFinite(credentialId) || credentialId <= 0) {
-        sendResponse({ success: false, error: 'credential_id inválido' });
-        return false;
-      }
-      (async () => {
-        try {
-          const response = await new Promise((resolve, reject) => {
-            chrome.runtime.sendMessage(
-              { action: 'getCredentials', url: currentUrl, manual: true, credential_id: credentialId },
-              (response) => {
-                if (chrome.runtime.lastError) {
-                  reject(new Error(chrome.runtime.lastError.message));
-                  return;
-                }
-                resolve(response);
-              }
-            );
-          });
-
-          if (!response || !response.success || !response.data || response.data.mode !== 'single' || !response.data.credential) {
-            sendResponse({ success: false, error: (response && response.error) ? response.error : 'No se pudo obtener la credencial seleccionada' });
-            return;
-          }
-
-          const filled = await fillCredentials(response.data.credential);
-          sendResponse({ success: filled === true });
-        } catch (err) {
-          logError('fillWithCredentialId error', err);
-          sendResponse({ success: false, error: err && err.message ? err.message : String(err) });
-        }
-      })();
-      return true;
     }
   });
 })();

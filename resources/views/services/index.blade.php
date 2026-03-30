@@ -104,7 +104,6 @@
     @endif
 </div>
 
-@push('scripts')
 <script>
 function toggleGroup(id) {
     const content = document.getElementById(id);
@@ -123,5 +122,4 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 });
 </script>
-@endpush
 @endsection
