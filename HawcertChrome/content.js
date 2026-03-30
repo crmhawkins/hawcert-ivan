@@ -156,10 +156,11 @@
       }
 
       // ——— Flujo dos pasos: venimos de haber rellenado el usuario ———
-      // Se comprueba ANTES de checkCredentials para que funcione aunque la URL
-      // de la página de contraseña sea distinta al patrón de la credencial
-      if (sessionStorage.getItem('hawcert-two-step')) {
-        sessionStorage.removeItem('hawcert-two-step');
+      // Usamos background.js en lugar de sessionStorage para que funcione cross-origin
+      const twoStep = await new Promise(resolve => {
+        chrome.runtime.sendMessage({ action: 'checkAndClearTwoStepPending' }, resolve);
+      });
+      if (twoStep && twoStep.pending) {
         log('Flujo dos pasos detectado: rellenando contraseña sin confirmación');
         const resp = await new Promise(resolve => {
           chrome.runtime.sendMessage({ action: 'retrieveCachedCredentials' }, resolve);
@@ -495,33 +496,44 @@
     if (!field || value == null) return;
     field.focus();
 
-    // Usar el setter nativo del prototipo para compatibilidad con React/Vue/Angular
-    // y con macOS Chrome que ignora la asignación directa en campos de contraseña
+    // Método 1: execCommand — genera eventos nativos (isTrusted=true en algunos contextos)
+    // Funciona en macOS Chrome con React/Angular y evita bloqueos de seguridad del browser
+    let filledOk = false;
     try {
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        field.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype,
-        'value'
-      )?.set;
-      if (nativeSetter) {
-        nativeSetter.call(field, value);
-      } else {
+      field.select();
+      filledOk = document.execCommand('insertText', false, value);
+    } catch (e) {
+      filledOk = false;
+    }
+
+    // Método 2: setter nativo del prototipo (React/Vue/Angular)
+    if (!filledOk || field.value !== value) {
+      try {
+        const proto = field.tagName === 'TEXTAREA'
+          ? window.HTMLTextAreaElement.prototype
+          : window.HTMLInputElement.prototype;
+        const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (nativeSetter) {
+          nativeSetter.call(field, value);
+        } else {
+          field.value = value;
+        }
+      } catch (e) {
         field.value = value;
       }
-    } catch (e) {
-      field.value = value;
     }
 
     filledFields.add(field);
 
-    // Disparar eventos en orden para que todos los frameworks detecten el cambio
-    field.dispatchEvent(new Event('focus',   { bubbles: true }));
-    field.dispatchEvent(new InputEvent('input',  { bubbles: true, cancelable: true, data: value }));
-    field.dispatchEvent(new Event('change',  { bubbles: true }));
+    // Disparar eventos en orden correcto para que todos los frameworks lo detecten
+    field.dispatchEvent(new Event('focus',    { bubbles: true }));
+    field.dispatchEvent(new InputEvent('input',   { bubbles: true, cancelable: true }));
+    field.dispatchEvent(new Event('change',   { bubbles: true }));
     field.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'End' }));
     field.dispatchEvent(new KeyboardEvent('keyup',   { bubbles: true, key: 'End' }));
-    field.dispatchEvent(new Event('blur',    { bubbles: true }));
+    field.dispatchEvent(new Event('blur',     { bubbles: true }));
 
-    log(label, 'rellenado, valor length=', value.length);
+    log(label, 'rellenado, valor length=', value.length, 'método execCommand:', filledOk);
   }
 
   /**
@@ -588,8 +600,8 @@
       if (hasUser && !hasPass) {
         log('Solo campo usuario: rellenando usuario y buscando botón Siguiente');
         fillFieldAndTrigger(usernameField, credential.username, 'Usuario');
-        // Marcar que el siguiente paso (contraseña) debe rellenarse sin pedir confirmación
-        sessionStorage.setItem('hawcert-two-step', '1');
+        // Marcar en background (cross-origin safe) que el siguiente paso es la contraseña
+        chrome.runtime.sendMessage({ action: 'setTwoStepPending' });
         const nextBtn = form ? findNextButton(form) : findNextButton(document.body);
         if (nextBtn) {
           log('Pulsando botón Siguiente:', nextBtn.textContent?.trim() || nextBtn.value);

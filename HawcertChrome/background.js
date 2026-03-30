@@ -23,6 +23,9 @@ chrome.runtime.onConnect.addListener((port) => {
 // Caché temporal de credenciales seguras (indexadas por tab.id)
 const credentialCache = new Map();
 
+// Flag de flujo dos pasos por pestaña (persiste cross-origin a diferencia de sessionStorage)
+const twoStepPending = new Map();
+
 // Escuchar mensajes del content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Manejar mensajes de forma asíncrona
@@ -97,8 +100,36 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return true;
     }
 
-    credentialCache.delete(tabId);
+    // Si hay un flujo dos pasos pendiente, NO borrar el caché todavía:
+    // la página de contraseña necesitará recuperarlo de nuevo.
+    // Se borra en el segundo retrieve o tras 60 segundos.
+    if (twoStepPending.get(tabId)) {
+      // Segunda recuperación: borrar caché y flag
+      twoStepPending.delete(tabId);
+      credentialCache.delete(tabId);
+    } else {
+      // Primera recuperación: programar auto-borrado por seguridad (60s)
+      setTimeout(() => credentialCache.delete(tabId), 60000);
+    }
     sendResponse({ success: true, credentials: cached });
+    return true;
+  }
+
+  // Marca la pestaña como en flujo dos pasos (cross-origin safe)
+  if (request.action === 'setTwoStepPending') {
+    const tabId = sender.tab ? sender.tab.id : 'unknown';
+    twoStepPending.set(tabId, true);
+    // Auto-limpiar tras 60 segundos por seguridad
+    setTimeout(() => twoStepPending.delete(tabId), 60000);
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  // Comprueba y limpia el flag de flujo dos pasos
+  if (request.action === 'checkAndClearTwoStepPending') {
+    const tabId = sender.tab ? sender.tab.id : 'unknown';
+    const pending = twoStepPending.get(tabId) === true;
+    sendResponse({ pending });
     return true;
   }
 
