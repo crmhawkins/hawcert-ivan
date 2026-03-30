@@ -15,11 +15,15 @@ class CertificateController extends Controller
 {
     public function index()
     {
-        $certificates = Certificate::with(['user', 'services', 'permissions'])
+        $grouped = Certificate::with(['user', 'services', 'permissions'])
             ->latest()
-            ->paginate(15);
-        
-        return view('certificates.index', compact('certificates'));
+            ->get()
+            ->groupBy(function ($cert) {
+                return $cert->organization ?: 'Sin organización';
+            })
+            ->sortKeys();
+
+        return view('certificates.index', compact('grouped'));
     }
 
     public function create()
