@@ -78,11 +78,19 @@
   }).observe(document, { subtree: true, childList: true });
 
   // Mostrar overlay de protección si venimos de una navegación con credenciales
+  // Esperamos a que document.body exista (document_start lo ejecuta antes del body)
   if (sessionStorage.getItem('hawcert-navigating')) {
-    showSecureOverlay();
-    window.addEventListener('load', function() {
-      setTimeout(removeSecureOverlay, 800);
-    });
+    const doOverlay = () => {
+      showSecureOverlay();
+      window.addEventListener('load', function() {
+        setTimeout(removeSecureOverlay, 800);
+      });
+    };
+    if (document.body) {
+      doOverlay();
+    } else {
+      document.addEventListener('DOMContentLoaded', doOverlay);
+    }
   }
 
   // Verificar y rellenar cuando la página carga
@@ -102,10 +110,16 @@
     }
   });
 
-  formObserver.observe(document.body, {
-    childList: true,
-    subtree: true,
-  });
+  const startFormObserver = () => {
+    if (document.body) {
+      formObserver.observe(document.body, { childList: true, subtree: true });
+    } else {
+      document.addEventListener('DOMContentLoaded', () => {
+        formObserver.observe(document.body, { childList: true, subtree: true });
+      });
+    }
+  };
+  startFormObserver();
 
   /**
    * Verifica si hay credenciales para esta URL y las rellena (o pregunta).
@@ -139,6 +153,22 @@
           return await fillCredentials(response.credentials);
         }
         return false;
+      }
+
+      // ——— Flujo dos pasos: venimos de haber rellenado el usuario ———
+      // Se comprueba ANTES de checkCredentials para que funcione aunque la URL
+      // de la página de contraseña sea distinta al patrón de la credencial
+      if (sessionStorage.getItem('hawcert-two-step')) {
+        sessionStorage.removeItem('hawcert-two-step');
+        log('Flujo dos pasos detectado: rellenando contraseña sin confirmación');
+        const resp = await new Promise(resolve => {
+          chrome.runtime.sendMessage({ action: 'retrieveCachedCredentials' }, resolve);
+        });
+        if (resp && resp.success && resp.credentials) {
+          showSecureOverlay();
+          await fillCredentials(resp.credentials);
+        }
+        return true;
       }
 
       // Flujo Automático: Just-In-Time (Comprobar -> Confirmar -> Obtener -> Inyectar)
@@ -354,9 +384,10 @@
 
   function showSecureOverlay() {
     if (document.getElementById('hawcert-secure-overlay')) return;
+    const target = document.body || document.documentElement;
+    if (!target) return; // Aún no hay DOM (document_start muy temprano)
     const overlay = document.createElement('div');
     overlay.id = 'hawcert-secure-overlay';
-    // Se usa un z-index altísimo
     overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(255, 255, 255, 0.95); z-index: 2147483646; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: system-ui, -apple-system, sans-serif; backdrop-filter: blur(8px);';
     overlay.innerHTML = `
       <div style="width: 48px; height: 48px; border: 4px solid #e5e7eb; border-top: 4px solid #2563eb; border-radius: 50%; animation: hawcertSpin 1s linear infinite;"></div>
@@ -364,7 +395,7 @@
       <div style="margin-top: 8px; font-size: 15px; color: #4b5563;">Iniciando sesión de forma segura...</div>
       <style>@keyframes hawcertSpin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }</style>
     `;
-    document.body.appendChild(overlay);
+    target.appendChild(overlay);
     sessionStorage.setItem('hawcert-navigating', '1');
   }
 
@@ -557,6 +588,8 @@
       if (hasUser && !hasPass) {
         log('Solo campo usuario: rellenando usuario y buscando botón Siguiente');
         fillFieldAndTrigger(usernameField, credential.username, 'Usuario');
+        // Marcar que el siguiente paso (contraseña) debe rellenarse sin pedir confirmación
+        sessionStorage.setItem('hawcert-two-step', '1');
         const nextBtn = form ? findNextButton(form) : findNextButton(document.body);
         if (nextBtn) {
           log('Pulsando botón Siguiente:', nextBtn.textContent?.trim() || nextBtn.value);
