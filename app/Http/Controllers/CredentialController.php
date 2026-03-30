@@ -15,10 +15,9 @@ class CredentialController extends Controller
     public function index()
     {
         $grouped = Credential::with(['user', 'certificates'])
-            ->where('is_active', true)
             ->orderBy('website_name')
             ->get()
-            ->groupBy('website_name')
+            ->groupBy(fn($c) => mb_strtoupper(trim($c->website_name)))
             ->sortKeys();
 
         return view('credentials.index', compact('grouped'));
@@ -31,8 +30,15 @@ class CredentialController extends Controller
     {
         $users = User::all();
         $certificates = Certificate::where('is_active', true)->get();
-        
-        return view('credentials.create', compact('users', 'certificates'));
+        $existingGroups = Credential::select('website_name')
+            ->distinct()
+            ->orderBy('website_name')
+            ->pluck('website_name')
+            ->map(fn($n) => mb_strtoupper(trim($n)))
+            ->unique()
+            ->values();
+
+        return view('credentials.create', compact('users', 'certificates', 'existingGroups'));
     }
 
     /**
@@ -67,7 +73,7 @@ class CredentialController extends Controller
         $credential = Credential::create([
             'user_id' => $validated['user_id'],
             'certificate_id' => $validated['certificate_id'],
-            'website_name' => $validated['website_name'],
+            'website_name' => mb_strtoupper(trim($validated['website_name'])),
             'website_url_pattern' => $validated['website_url_pattern'],
             'auth_type' => $validated['auth_type'] ?? Credential::AUTH_TYPE_FORM,
             'username_field_selector' => !empty(trim($validated['username_field_selector'] ?? '')) ? trim($validated['username_field_selector']) : null,
@@ -101,8 +107,15 @@ class CredentialController extends Controller
     {
         $users = User::all();
         $certificates = Certificate::where('is_active', true)->get();
-        
-        return view('credentials.edit', compact('credential', 'users', 'certificates'));
+        $existingGroups = Credential::select('website_name')
+            ->distinct()
+            ->orderBy('website_name')
+            ->pluck('website_name')
+            ->map(fn($n) => mb_strtoupper(trim($n)))
+            ->unique()
+            ->values();
+
+        return view('credentials.edit', compact('credential', 'users', 'certificates', 'existingGroups'));
     }
 
     /**
@@ -137,7 +150,7 @@ class CredentialController extends Controller
         $update = [
             'user_id' => $validated['user_id'],
             'certificate_id' => $validated['certificate_id'],
-            'website_name' => $validated['website_name'],
+            'website_name' => mb_strtoupper(trim($validated['website_name'])),
             'website_url_pattern' => $validated['website_url_pattern'],
             'auth_type' => $validated['auth_type'] ?? Credential::AUTH_TYPE_FORM,
             'username_field_selector' => !empty(trim($validated['username_field_selector'] ?? '')) ? trim($validated['username_field_selector']) : null,

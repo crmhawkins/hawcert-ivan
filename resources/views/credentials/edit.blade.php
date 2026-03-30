@@ -12,8 +12,18 @@
 
         <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <div>
-                <label for="website_name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombre del Sitio Web</label>
-                <input type="text" name="website_name" id="website_name" required value="{{ old('website_name', $credential->website_name) }}" placeholder="Ej: IONOS" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                <label for="website_name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Grupo / Sitio Web</label>
+                <input type="text" name="website_name" id="website_name" required
+                    list="groups-list"
+                    value="{{ old('website_name', $credential->website_name) }}"
+                    placeholder="Ej: IONOS"
+                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                <datalist id="groups-list">
+                    @foreach($existingGroups as $group)
+                        <option value="{{ $group }}">
+                    @endforeach
+                </datalist>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Selecciona un grupo existente o escribe uno nuevo. Se guardará en mayúsculas.</p>
             </div>
 
             <div>
