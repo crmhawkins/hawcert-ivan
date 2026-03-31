@@ -87,9 +87,6 @@ class CredentialController extends Controller
             'notes' => $validated['notes'] ?? null,
         ]);
 
-        // Sync pivot table so the certificate can access this credential
-        $credential->certificates()->sync($validated['certificate_id'] ? [$validated['certificate_id']] : []);
-
         return redirect()->route('credentials.index')
             ->with('success', 'Credencial creada exitosamente.');
     }
