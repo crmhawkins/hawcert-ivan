@@ -60,15 +60,19 @@
                 </select>
             </div>
 
-            <div>
-                <label for="certificate_id" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Certificado (opcional)</label>
-                <select name="certificate_id" id="certificate_id" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
-                    <option value="">Ninguno</option>
+            <div class="sm:col-span-2">
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Certificados con acceso (opcional)</label>
+                <div class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto border border-gray-200 dark:border-gray-600 rounded-md p-3">
                     @foreach($certificates as $certificate)
-                        <option value="{{ $certificate->id }}" {{ old('certificate_id') == $certificate->id ? 'selected' : '' }}>{{ $certificate->name }}</option>
+                        <label class="inline-flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" name="certificate_ids[]" value="{{ $certificate->id }}"
+                                {{ in_array($certificate->id, old('certificate_ids', [])) ? 'checked' : '' }}
+                                class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                            <span class="text-sm text-gray-700 dark:text-gray-300">{{ $certificate->name }}</span>
+                        </label>
                     @endforeach
-                </select>
-                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Si deja ambos en Ninguno, la credencial será general para cualquier certificado</p>
+                </div>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Sin selección, la credencial es accesible para cualquier certificado. Marca uno o más para restringir el acceso.</p>
             </div>
 
             <div>

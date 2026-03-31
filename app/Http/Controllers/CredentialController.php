@@ -48,10 +48,11 @@ class CredentialController extends Controller
     {
         $validated = $request->validate([
             'user_id' => 'nullable|exists:users,id',
-            'certificate_id' => 'nullable|exists:certificates,id',
+            'certificate_ids' => 'nullable|array',
+            'certificate_ids.*' => 'exists:certificates,id',
             'website_name' => 'required|string|max:255',
             'website_url_pattern' => 'required|string|max:500',
-            'auth_type' => 'required|in:form,certificate_only',
+            'auth_type' => 'required|in:form,certificate_only,certificate_file',
             'username_field_selector' => 'nullable|string|max:255',
             'password_field_selector' => 'nullable|string|max:255',
             'username' => 'nullable|string|max:255',
@@ -72,7 +73,6 @@ class CredentialController extends Controller
 
         $credential = Credential::create([
             'user_id' => $validated['user_id'],
-            'certificate_id' => $validated['certificate_id'],
             'website_name' => mb_strtoupper(trim($validated['website_name'])),
             'website_url_pattern' => $validated['website_url_pattern'],
             'auth_type' => $validated['auth_type'] ?? Credential::AUTH_TYPE_FORM,
@@ -86,6 +86,8 @@ class CredentialController extends Controller
             'is_active' => $validated['is_active'] ?? true,
             'notes' => $validated['notes'] ?? null,
         ]);
+
+        $credential->certificates()->sync($validated['certificate_ids'] ?? []);
 
         return redirect()->route('credentials.index')
             ->with('success', 'Credencial creada exitosamente.');
@@ -105,6 +107,7 @@ class CredentialController extends Controller
      */
     public function edit(Credential $credential)
     {
+        $credential->load('certificates');
         $users = User::all();
         $certificates = Certificate::where('is_active', true)->get();
         $existingGroups = Credential::select('website_name')
@@ -125,10 +128,11 @@ class CredentialController extends Controller
     {
         $validated = $request->validate([
             'user_id' => 'nullable|exists:users,id',
-            'certificate_id' => 'nullable|exists:certificates,id',
+            'certificate_ids' => 'nullable|array',
+            'certificate_ids.*' => 'exists:certificates,id',
             'website_name' => 'required|string|max:255',
             'website_url_pattern' => 'required|string|max:500',
-            'auth_type' => 'required|in:form,certificate_only',
+            'auth_type' => 'required|in:form,certificate_only,certificate_file',
             'username_field_selector' => 'nullable|string|max:255',
             'password_field_selector' => 'nullable|string|max:255',
             'username' => 'nullable|string|max:255',
@@ -149,7 +153,6 @@ class CredentialController extends Controller
 
         $update = [
             'user_id' => $validated['user_id'],
-            'certificate_id' => $validated['certificate_id'],
             'website_name' => mb_strtoupper(trim($validated['website_name'])),
             'website_url_pattern' => $validated['website_url_pattern'],
             'auth_type' => $validated['auth_type'] ?? Credential::AUTH_TYPE_FORM,
@@ -170,6 +173,7 @@ class CredentialController extends Controller
             }
         }
         $credential->update($update);
+        $credential->certificates()->sync($validated['certificate_ids'] ?? []);
 
         return redirect()->route('credentials.index')
             ->with('success', 'Credencial actualizada exitosamente.');
