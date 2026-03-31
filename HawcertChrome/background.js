@@ -20,38 +20,53 @@ chrome.runtime.onConnect.addListener((port) => {
   // Mantener conexión activa
 });
 
-// Caché temporal de credenciales seguras (indexadas por tab.id)
-const credentialCache = new Map();
+// ——— Helpers para chrome.storage.session ———
+// chrome.storage.session persiste aunque el service worker sea terminado por Chrome MV3.
+// Esto soluciona la pérdida de credenciales en el flujo dos-pasos (user → password en otra URL).
 
-// Flag de flujo dos pasos por pestaña (persiste cross-origin a diferencia de sessionStorage)
-const twoStepPending = new Map();
+function credKey(tabId)    { return `cred_${tabId}`; }
+function twoStepKey(tabId) { return `twostep_${tabId}`; }
+
+function sessionGet(key) {
+  return new Promise(resolve => {
+    chrome.storage.session.get([key], result => resolve(result[key] ?? null));
+  });
+}
+function sessionSet(key, value) {
+  return new Promise(resolve => {
+    chrome.storage.session.set({ [key]: value }, resolve);
+  });
+}
+function sessionRemove(keys) {
+  return new Promise(resolve => {
+    chrome.storage.session.remove(Array.isArray(keys) ? keys : [keys], resolve);
+  });
+}
+
+// Tiempo máximo que las credenciales quedan en sesión (60 segundos)
+const CACHE_TTL_MS = 60_000;
 
 // Escuchar mensajes del content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  // Manejar mensajes de forma asíncrona
+  const tabId = sender.tab ? sender.tab.id : 'unknown';
+
   if (request.action === 'getCredentials') {
     getCredentials(request.url, request.manual === true)
-      .then(credentials => {
-        sendResponse({ success: true, credentials });
-      })
-      .catch(error => {
-        sendResponse({ success: false, error: error.message });
-      });
-    return true; // Mantener el canal abierto para respuesta asíncrona
+      .then(credentials => sendResponse({ success: true, credentials }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
   }
 
-  // Pre-comprobar credenciales guardándolas en el background y enviando solo metadatos al content.js
+  // Pre-comprobar credenciales: guardarlas en session storage y enviar solo metadatos al content.js
   if (request.action === 'checkCredentials') {
     getCredentials(request.url, false)
-      .then(credentials => {
-        const tabId = sender.tab ? sender.tab.id : 'unknown';
-
+      .then(async credentials => {
         if (credentials && credentials.mode === 'multiple') {
-          // Modo múltiple: guardar lista + url en cache
-          credentialCache.set(tabId, {
+          await sessionSet(credKey(tabId), {
             mode: 'multiple',
             url: request.url,
             list: credentials.credentials,
+            ts: Date.now(),
           });
           sendResponse({
             success: true,
@@ -61,8 +76,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             certificateFile: false,
           });
         } else {
-          // Modo single (comportamiento actual)
-          credentialCache.set(tabId, credentials);
+          await sessionSet(credKey(tabId), { data: credentials, ts: Date.now() });
           sendResponse({
             success: true,
             websiteName: credentials.website_name,
@@ -71,65 +85,63 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           });
         }
       })
-      .catch(error => {
-        sendResponse({ success: false, error: error.message });
-      });
+      .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
 
-  // Recupera las verdaderas credenciales cacheadas (Just-In-Time)
+  // Recupera las credenciales cacheadas (Just-In-Time)
   if (request.action === 'retrieveCachedCredentials') {
-    const tabId = sender.tab ? sender.tab.id : 'unknown';
-    const cached = credentialCache.get(tabId);
+    (async () => {
+      const cached = await sessionGet(credKey(tabId));
 
-    if (!cached) {
-      sendResponse({ success: false, error: 'Credenciales expiradas o no encontradas en caché segura' });
-      return true;
-    }
-
-    if (cached.mode === 'multiple') {
-      const credentialId = request.credentialId;
-      if (!credentialId) {
-        sendResponse({ success: false, error: 'Se requiere seleccionar una cuenta' });
-        return true;
+      if (!cached || (Date.now() - cached.ts > CACHE_TTL_MS)) {
+        await sessionRemove(credKey(tabId));
+        sendResponse({ success: false, error: 'Credenciales expiradas o no encontradas en caché segura' });
+        return;
       }
-      credentialCache.delete(tabId);
-      getCredentials(cached.url, false, credentialId)
-        .then(credential => sendResponse({ success: true, credentials: credential }))
-        .catch(err => sendResponse({ success: false, error: err.message }));
-      return true;
-    }
 
-    // Si hay un flujo dos pasos pendiente, NO borrar el caché todavía:
-    // la página de contraseña necesitará recuperarlo de nuevo.
-    // Se borra en el segundo retrieve o tras 60 segundos.
-    if (twoStepPending.get(tabId)) {
-      // Segunda recuperación: borrar caché y flag
-      twoStepPending.delete(tabId);
-      credentialCache.delete(tabId);
-    } else {
-      // Primera recuperación: programar auto-borrado por seguridad (60s)
-      setTimeout(() => credentialCache.delete(tabId), 60000);
-    }
-    sendResponse({ success: true, credentials: cached });
+      // Modo múltiple: obtener credencial específica de la API
+      if (cached.mode === 'multiple') {
+        const credentialId = request.credentialId;
+        if (!credentialId) {
+          sendResponse({ success: false, error: 'Se requiere seleccionar una cuenta' });
+          return;
+        }
+        await sessionRemove(credKey(tabId));
+        getCredentials(cached.url, false, credentialId)
+          .then(credential => sendResponse({ success: true, credentials: credential }))
+          .catch(err => sendResponse({ success: false, error: err.message }));
+        return;
+      }
+
+      // Flujo dos pasos: si el flag está activo → segunda página (contraseña) → limpiar todo
+      const twoStepFlag = await sessionGet(twoStepKey(tabId));
+      if (twoStepFlag) {
+        await sessionRemove([credKey(tabId), twoStepKey(tabId)]);
+      }
+      // En el flujo normal (sin dos pasos) o en la primera recuperación (antes de setTwoStepPending),
+      // dejamos la caché intacta. Expirará por TTL o será sobreescrita en la próxima visita.
+
+      sendResponse({ success: true, credentials: cached.data });
+    })();
     return true;
   }
 
-  // Marca la pestaña como en flujo dos pasos (cross-origin safe)
+  // Marca la pestaña como en flujo dos pasos (persiste en session storage, cross-origin safe)
   if (request.action === 'setTwoStepPending') {
-    const tabId = sender.tab ? sender.tab.id : 'unknown';
-    twoStepPending.set(tabId, true);
-    // Auto-limpiar tras 60 segundos por seguridad
-    setTimeout(() => twoStepPending.delete(tabId), 60000);
-    sendResponse({ ok: true });
+    (async () => {
+      await sessionSet(twoStepKey(tabId), true);
+      sendResponse({ ok: true });
+    })();
     return true;
   }
 
-  // Comprueba y limpia el flag de flujo dos pasos
+  // Comprueba si hay flujo dos pasos pendiente (sin borrar el flag)
   if (request.action === 'checkAndClearTwoStepPending') {
-    const tabId = sender.tab ? sender.tab.id : 'unknown';
-    const pending = twoStepPending.get(tabId) === true;
-    sendResponse({ pending });
+    (async () => {
+      const flag = await sessionGet(twoStepKey(tabId));
+      sendResponse({ pending: flag === true });
+    })();
     return true;
   }
 
@@ -174,7 +186,7 @@ function showCertificateOnlyNotification(websiteName) {
 /**
  * Obtiene credenciales desde la API de HawCert.
  * @param {string} url - URL actual
- * @param {boolean} manual - true si el usuario pulsó "Rellenar ahora" (solo entonces el servidor registra el uso en logs)
+ * @param {boolean} manual - true si el usuario pulsó "Rellenar ahora"
  * @param {string|null} credentialId - ID de credencial específica (para modo múltiple)
  */
 async function getCredentials(url, manual = false, credentialId = null) {
@@ -205,9 +217,7 @@ async function getCredentials(url, manual = false, credentialId = null) {
 
         const response = await fetch(`${config.apiUrl}/get-credentials`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
 

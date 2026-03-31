@@ -148,41 +148,50 @@ class Credential extends Model
 
     /**
      * Obtener credencial para una URL y certificado/usuario.
-     * Si se pasa $allowedCredentialIds (lista no vacía), solo se consideran esas credenciales (acceso restringido por certificado).
-     * Si no, se aplica lógica legacy: generales, por usuario o por certificado.
      */
-    public static function getForUrl(string $url, ?int $userId = null, ?int $certificateId = null, ?array $allowedCredentialIds = null): ?self
+    public static function getForUrl(string $url, ?int $userId = null, ?int $certificateId = null): ?self
     {
-        $all = self::getAllForUrl($url, $userId, $certificateId, $allowedCredentialIds);
+        $all = self::getAllForUrl($url, $userId, $certificateId);
         return $all->first();
     }
 
     /**
      * Obtiene TODAS las credenciales que aplican a una URL, ordenadas por prioridad.
-     * - Si $allowedCredentialIds es una lista no vacía, limita a esas credenciales (restricción por certificado).
-     * - En modo legacy (sin restricción), prioriza: específica por certificado > específica por usuario > general.
+     *
+     * Modelo credential-centric:
+     *  - Si la credencial tiene certificados asignados en el pivot → solo esos certificados la ven.
+     *  - Si la credencial NO tiene asignaciones en el pivot → es general y visible a todos
+     *    (aplicando las reglas legacy: general, por usuario o por certificate_id).
      *
      * @return \Illuminate\Support\Collection<int, self>
      */
-    public static function getAllForUrl(string $url, ?int $userId = null, ?int $certificateId = null, ?array $allowedCredentialIds = null)
+    public static function getAllForUrl(string $url, ?int $userId = null, ?int $certificateId = null)
     {
-        $query = self::where('is_active', true);
-
-        if ($allowedCredentialIds !== null && count($allowedCredentialIds) > 0) {
-            $query->whereIn('id', $allowedCredentialIds);
-        } else {
-            $query->where(function ($q) use ($userId, $certificateId) {
-                $q->where(function ($q2) {
-                    $q2->whereNull('user_id')->whereNull('certificate_id');
-                });
-                if ($userId) {
-                    $q->orWhere('user_id', $userId);
-                }
+        $query = self::with('certificates')
+            ->where('is_active', true)
+            ->where(function ($outer) use ($userId, $certificateId) {
+                // Rama A: credencial asignada explícitamente a este certificado via pivot
                 if ($certificateId) {
-                    $q->orWhere('certificate_id', $certificateId);
+                    $outer->orWhereHas('certificates', fn ($q) => $q->where('certificates.id', $certificateId));
                 }
+
+                // Rama B: credencial sin asignaciones en el pivot → acceso general (reglas legacy)
+                $outer->orWhere(function ($noPivot) use ($userId, $certificateId) {
+                    $noPivot->whereDoesntHave('certificates');
+                    $noPivot->where(function ($legacy) use ($userId, $certificateId) {
+                        // General: sin usuario ni certificado específico asignado
+                        $legacy->where(function ($general) {
+                            $general->whereNull('user_id')->whereNull('certificate_id');
+                        });
+                        if ($userId) {
+                            $legacy->orWhere('user_id', $userId);
+                        }
+                        if ($certificateId) {
+                            $legacy->orWhere('certificate_id', $certificateId);
+                        }
+                    });
+                });
             });
-        }
 
         $candidates = $query->get()->filter(fn ($c) => $c->matchesUrl($url));
 
@@ -190,15 +199,13 @@ class Credential extends Model
             return collect();
         }
 
-        if ($allowedCredentialIds !== null && count($allowedCredentialIds) > 0) {
-            // Mantener un orden estable por nombre para que el selector sea consistente
-            return $candidates->sortBy(fn ($c) => (string) ($c->website_name ?? ''))->values();
-        }
-
-        // Priorizar: específica (certificado o usuario) antes que general
+        // Priorizar: asignada via pivot > específica legacy (certificado o usuario) > general
         return $candidates
             ->sortByDesc(function ($c) use ($userId, $certificateId) {
                 $score = 0;
+                if ($certificateId && $c->certificates->contains('id', $certificateId)) {
+                    $score += 10;
+                }
                 if ($certificateId && $c->certificate_id == $certificateId) {
                     $score += 2;
                 }

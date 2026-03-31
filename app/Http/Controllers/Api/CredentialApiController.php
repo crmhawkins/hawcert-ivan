@@ -70,20 +70,10 @@ class CredentialApiController extends Controller
                 ], 403);
             }
 
-            // Si el certificado tiene credenciales asignadas (pivot), solo puede usar esas
-            $allowedCredentialIds = $certificate->credentials()->pluck('credentials.id')->toArray();
-            $restriction = count($allowedCredentialIds) > 0 ? $allowedCredentialIds : null;
-
             // Si el cliente pide una credencial concreta (selección manual), validarla y devolverla
             if ($requestedCredentialId) {
-                if ($restriction !== null && !in_array((int) $requestedCredentialId, $restriction, true)) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'La credencial solicitada no está permitida para este certificado',
-                    ], 403);
-                }
-
-                $credential = Credential::where('id', (int) $requestedCredentialId)
+                $credential = Credential::with('certificates')
+                    ->where('id', (int) $requestedCredentialId)
                     ->where('is_active', true)
                     ->first();
 
@@ -94,14 +84,23 @@ class CredentialApiController extends Controller
                     ], 404);
                 }
 
+                // Verificar acceso: la credencial debe tener este certificado en el pivot,
+                // o no tener ninguna asignación (credencial general)
+                $credCertIds = $credential->certificates->pluck('id')->toArray();
+                if (!empty($credCertIds) && !in_array($certificate->id, $credCertIds, true)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'La credencial solicitada no está permitida para este certificado',
+                    ], 403);
+                }
+
                 return $this->respondWithSingleCredential($request, $certificate, $credential, $currentUrl, $clientIp);
             }
 
             $matches = Credential::getAllForUrl(
                 $currentUrl,
                 $certificate->user_id,
-                $certificate->id,
-                $restriction
+                $certificate->id
             );
 
             if ($matches->isEmpty()) {
