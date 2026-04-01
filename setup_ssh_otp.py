@@ -117,7 +117,7 @@ def upload_text(ssh: paramiko.SSHClient, content: str, remote_path: str):
 
 # ─── Pasos de configuración SSH ───────────────────────────────────────────────
 
-def check_prerequisites(ssh, total):
+def check_prerequisites(ssh, linux_user: str, total):
     step(3, total, "Comprobando prerequisitos del servidor")
 
     out, _, _ = run(ssh, "curl --version 2>/dev/null | head -1", check=False)
@@ -131,6 +131,19 @@ def check_prerequisites(ssh, total):
         ok(f"pam_exec.so: {out}")
     else:
         warn("pam_exec.so no encontrado en rutas estándar — puede estar en otra ruta")
+
+    # Crear el usuario Linux compartido si no existe
+    out, _, rc = run(ssh, f"id {linux_user} 2>/dev/null && echo exists || echo missing", check=False)
+    if "missing" in out:
+        info(f"Creando usuario Linux compartido '{linux_user}'...")
+        run(ssh, f"useradd -m -s /bin/bash {linux_user} 2>/dev/null || useradd -m {linux_user}")
+        # Bloquear contraseña del sistema: el acceso será SOLO via OTP
+        run(ssh, f"passwd -l {linux_user}", check=False)
+        ok(f"Usuario '{linux_user}' creado con contraseña bloqueada (solo acceso OTP)")
+    else:
+        # Asegurar que la contraseña del sistema esté bloqueada para forzar uso de OTP
+        run(ssh, f"passwd -l {linux_user} 2>/dev/null", check=False)
+        ok(f"Usuario '{linux_user}' ya existe")
 
 
 def create_pam_script(ssh, slug: str, api_secret: str, total):
@@ -166,12 +179,21 @@ def configure_pam(ssh, total):
 
     out, _, _ = run(ssh, f"grep -c 'pam_hawcert' {PAM_SSHD_PATH}", check=False)
     if int(out.strip() or "0") > 0:
-        warn("Entrada HawCert ya existe en PAM — no se duplica")
+        # Si existe con 'required', actualizar a 'sufficient' para que el OTP sea suficiente
+        existing, _, _ = run(ssh, f"grep 'pam_hawcert' {PAM_SSHD_PATH}", check=False)
+        if "required" in existing:
+            run(ssh, f"sed -i 's|auth required pam_exec.so expose_authtok|auth sufficient pam_exec.so expose_authtok|' {PAM_SSHD_PATH}")
+            ok("Entrada HawCert actualizada: required → sufficient")
+        else:
+            ok("Entrada HawCert ya configurada correctamente (sufficient)")
         return
 
-    hawcert_line = f"auth required pam_exec.so expose_authtok {PAM_SCRIPT_PATH}"
+    # 'sufficient': si el OTP valida, la autenticación es exitosa inmediatamente.
+    # No se consulta pam_unix.so (contraseña del sistema), lo que permite
+    # usar la cuenta con contraseña de sistema bloqueada.
+    hawcert_line = f"auth sufficient pam_exec.so expose_authtok {PAM_SCRIPT_PATH}"
     run(ssh, f"sed -i '1s|^|{hawcert_line}\\n|' {PAM_SSHD_PATH}")
-    ok("Línea HawCert añadida al inicio de pam.d/sshd")
+    ok("Línea HawCert añadida al inicio de pam.d/sshd (sufficient)")
 
 
 def configure_sshd(ssh, total):
@@ -300,7 +322,7 @@ def main():
 
     # ── Configurar el servidor ────────────────────────────────────────────────
     try:
-        check_prerequisites(ssh, TOTAL_STEPS)
+        check_prerequisites(ssh, linux_user, TOTAL_STEPS)
         create_pam_script(ssh, slug, api_secret, TOTAL_STEPS)
         configure_pam(ssh, TOTAL_STEPS)
         configure_sshd(ssh, TOTAL_STEPS)

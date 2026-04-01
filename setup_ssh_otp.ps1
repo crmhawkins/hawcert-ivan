@@ -139,30 +139,43 @@ if ($r.Output -notmatch "found") {
 }
 ok "curl disponible"
 
+# ─── Crear usuario Linux compartido si no existe ──────────────────────────────
+$checkUser = Invoke-Remote $session "id $linuxUser 2>/dev/null && echo exists || echo missing"
+if ($checkUser.Output -match "missing") {
+    info "Creando usuario Linux compartido '$linuxUser'..."
+    Invoke-Remote $session "useradd -m -s /bin/bash $linuxUser 2>/dev/null; echo done" | Out-Null
+    Invoke-Remote $session "passwd -l $linuxUser 2>/dev/null; echo done" | Out-Null
+    ok "Usuario '$linuxUser' creado con contrasena bloqueada (solo acceso OTP)"
+} else {
+    Invoke-Remote $session "passwd -l $linuxUser 2>/dev/null; echo done" | Out-Null
+    ok "Usuario '$linuxUser' ya existe"
+}
+
 # ─── Crear script PAM ────────────────────────────────────────────────────────
 $validateUrl = "$HAWCERT_BASE_URL/api/ssh/validate"
 
-# Construir el script bash como bloque de texto y subirlo linea a linea
-$line1  = '#!/bin/bash'
-$line2  = '# HawCert SSH OTP Validator - generado automaticamente'
-$line3  = 'TOKEN=$(cat -)'
-$line4  = "RESULT=\$(curl -sf --max-time 10 -X POST `"$validateUrl`" \\"
-$line5  = "  -H `"Content-Type: application/json`" \\"
-$line6  = "  -d `"{\\`"server_slug\\`":\\`"$slug\\`",\\`"api_secret\\`":\\`"$apiSecret\\`",\\`"username\\`":\\`"\$PAM_USER\\`",\\`"token\\`":\\`"\$TOKEN\\`"}`")"
-$line7  = 'if echo "$RESULT" | grep -q "\"success\":true"; then'
-$line8  = '    logger -t hawcert "OTP OK: $PAM_USER"'
-$line9  = '    exit 0'
-$line10 = 'fi'
-$line11 = 'logger -t hawcert "OTP DENEGADO: $PAM_USER"'
-$line12 = 'exit 1'
+# Construir el contenido del script PAM con here-string de PowerShell.
+# Las variables de bash (PAM_USER, TOKEN, RESULT) se escapan con backtick (`$)
+# para que PowerShell NO las expanda. $slug, $apiSecret y $validateUrl SI se expanden.
+$pamScript = @"
+#!/bin/bash
+# HawCert SSH OTP Validator - generado automaticamente
+TOKEN=`$(cat -)
+RESULT=`$(curl -sf --max-time 10 -X POST "$validateUrl" \
+  -H "Content-Type: application/json" \
+  -d "{\"server_slug\":\"$slug\",\"api_secret\":\"$apiSecret\",\"username\":\"`$PAM_USER\",\"token\":\"`$TOKEN\"}")
+if echo "`$RESULT" | grep -q '"'"'success'"'"':true'; then
+    logger -t hawcert "OTP OK: `$PAM_USER"
+    exit 0
+fi
+logger -t hawcert "OTP DENEGADO: `$PAM_USER"
+exit 1
+"@
 
-# Subir usando printf para evitar problemas con heredoc
-$uploadCmd = "printf '%s\n' " + `
-    "'$line1' '$line2' '$line3' '$line4' '$line5' '$line6' " + `
-    "'$line7' '$line8' '$line9' '$line10' '$line11' '$line12' " + `
-    "> $PAM_SCRIPT_PATH"
-
-Invoke-Remote $session $uploadCmd | Out-Null
+# Subir via base64 para evitar cualquier problema de escaping de shell
+$pamBytes  = [System.Text.Encoding]::UTF8.GetBytes($pamScript)
+$pamBase64 = [Convert]::ToBase64String($pamBytes)
+Invoke-Remote $session "echo '$pamBase64' | base64 -d > $PAM_SCRIPT_PATH" | Out-Null
 Invoke-Remote $session "chmod 700 $PAM_SCRIPT_PATH && chown root:root $PAM_SCRIPT_PATH" | Out-Null
 ok "Script PAM creado en $PAM_SCRIPT_PATH"
 
@@ -172,12 +185,20 @@ ok "Backup de PAM creado"
 
 $checkPam = Invoke-Remote $session "grep -c pam_hawcert $PAM_SSHD_PATH 2>/dev/null || echo 0"
 if ([int]($checkPam.Output.Trim()) -eq 0) {
-    $pamLine = "auth required pam_exec.so expose_authtok $PAM_SCRIPT_PATH"
+    # sufficient: si el OTP valida, acceso concedido inmediatamente sin consultar pam_unix.so
+    $pamLine = "auth sufficient pam_exec.so expose_authtok $PAM_SCRIPT_PATH"
     $insertCmd = "sed -i '1s|^|" + $pamLine + "\n|' $PAM_SSHD_PATH"
     Invoke-Remote $session $insertCmd | Out-Null
-    ok "Linea HawCert anadida a pam.d/sshd"
+    ok "Linea HawCert anadida a pam.d/sshd (sufficient)"
 } else {
-    warn "Entrada HawCert ya existia en PAM"
+    # Si existe con 'required', corregir a 'sufficient'
+    $existingPam = Invoke-Remote $session "grep pam_hawcert $PAM_SSHD_PATH"
+    if ($existingPam.Output -match "required") {
+        Invoke-Remote $session "sed -i 's|auth required pam_exec.so expose_authtok|auth sufficient pam_exec.so expose_authtok|' $PAM_SSHD_PATH" | Out-Null
+        ok "Entrada HawCert actualizada: required -> sufficient"
+    } else {
+        ok "Entrada HawCert ya configurada correctamente (sufficient)"
+    }
 }
 
 # ─── Configurar sshd_config ──────────────────────────────────────────────────

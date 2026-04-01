@@ -61,7 +61,7 @@
         <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 mb-6">
             <p class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Cómo conectarse</p>
             <code class="text-sm text-gray-800 dark:text-gray-200 font-mono block">
-                ssh {{ $service->ssh_user ?? 'admin' }}@{{ $service->ssh_host }}@if($service->ssh_port != 22) -p {{ $service->ssh_port }}@endif
+                ssh {{ ($service->ssh_user ?? 'admin') . '@' . $service->ssh_host }}{{ ($service->ssh_port ?? 22) != 22 ? ' -p ' . $service->ssh_port : '' }}
             </code>
             <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
                 Cuando el sistema pida contraseña, introduce la clave de arriba.

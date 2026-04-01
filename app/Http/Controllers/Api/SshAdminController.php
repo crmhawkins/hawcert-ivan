@@ -35,33 +35,49 @@ class SshAdminController extends Controller
             'slug'     => 'nullable|string|max:100|regex:/^[a-z0-9\-]+$/',
         ]);
 
-        // ── Generar slug si no viene ───────────────────────────────────────────
-        $slug = $request->slug
-            ? $request->slug
-            : Str::slug($request->name);
-
-        // Asegurar unicidad del slug
-        $baseSlug = $slug;
-        $i = 2;
-        while (Service::where('slug', $slug)->exists()) {
-            $slug = $baseSlug . '-' . $i++;
-        }
+        // ── Buscar si ya existe por nombre ──────────────────────────
+        $service = Service::where('name', $request->name)->first();
 
         // ── Generar api_secret seguro ──────────────────────────────────────────
         $apiSecret = bin2hex(random_bytes(32)); // 64 chars hex
 
-        // ── Crear el servicio ──────────────────────────────────────────────────
-        $service = Service::create([
-            'name'         => $request->name,
-            'slug'         => $slug,
-            'description'  => 'Servidor SSH configurado automáticamente por setup_ssh_otp.py',
-            'service_type' => 'ssh',
-            'ssh_host'     => $request->ssh_host,
-            'ssh_port'     => $request->ssh_port ?? 22,
-            'ssh_user'     => $request->ssh_user ?? 'root',
-            'api_secret'   => $apiSecret,
-            'is_active'    => true,
-        ]);
+        if ($service) {
+            // Actualizar el servicio existente, así si ejecutamos el script varias
+            // veces para el mismo servidor, solo reemplazamos el api_secret y host.
+            $service->update([
+                'ssh_host'   => $request->ssh_host,
+                'ssh_port'   => $request->ssh_port ?? 22,
+                'ssh_user'   => $request->ssh_user ?? 'root',
+                'api_secret' => $apiSecret,
+                'is_active'  => true,
+                'service_type'=> 'ssh', // asegurar que sea ssh
+            ]);
+        } else {
+            // ── Generar slug si es nuevo ───────────────────────────────────────────
+            $slug = $request->slug
+                ? $request->slug
+                : Str::slug($request->name);
+
+            // Asegurar unicidad del slug
+            $baseSlug = $slug;
+            $i = 2;
+            while (Service::where('slug', $slug)->exists()) {
+                $slug = $baseSlug . '-' . $i++;
+            }
+
+            // ── Crear el servicio ──────────────────────────────────────────────────
+            $service = Service::create([
+                'name'         => $request->name,
+                'slug'         => $slug,
+                'description'  => 'Servidor SSH configurado automáticamente por setup_ssh_otp.py',
+                'service_type' => 'ssh',
+                'ssh_host'     => $request->ssh_host,
+                'ssh_port'     => $request->ssh_port ?? 22,
+                'ssh_user'     => $request->ssh_user ?? 'root',
+                'api_secret'   => $apiSecret,
+                'is_active'    => true,
+            ]);
+        }
 
         return response()->json([
             'success'    => true,
