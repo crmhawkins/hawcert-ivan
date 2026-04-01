@@ -29,8 +29,11 @@ class AuthController extends Controller
         if (Auth::attempt($credentials, $remember)) {
             $user = Auth::user();
             $hasAccess = $user->certificates()
-                ->where('can_access_hawcert', true)
                 ->where('is_active', true)
+                ->where(function ($q) {
+                    $q->where('can_access_hawcert', true)
+                      ->orWhereHas('services', fn ($s) => $s->where('service_type', 'ssh')->where('is_active', true));
+                })
                 ->exists();
 
             if (!$hasAccess) {
@@ -119,7 +122,12 @@ class AuthController extends Controller
             ]);
         }
 
-        if (!$certificate->can_access_hawcert) {
+        $hasSshAccess = $certificate->services()
+            ->where('service_type', 'ssh')
+            ->where('is_active', true)
+            ->exists();
+
+        if (!$certificate->can_access_hawcert && !$hasSshAccess) {
             throw ValidationException::withMessages([
                 'certificate_file' => __('Este certificado no tiene acceso al panel HawCert.'),
             ]);
