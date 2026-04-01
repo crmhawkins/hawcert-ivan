@@ -41,6 +41,13 @@ class AuthController extends Controller
             }
 
             $request->session()->regenerate();
+
+            // Store the first active certificate in session for SSH access
+            $activeCert = $user->certificates()->where('is_active', true)->first();
+            if ($activeCert) {
+                session(['hawcert_certificate_id' => $activeCert->id]);
+            }
+
             return redirect()->intended('/dashboard');
         }
 
@@ -125,6 +132,7 @@ class AuthController extends Controller
         }
 
         Auth::login($certificate->user, true);
+        session(['hawcert_certificate_id' => $certificate->id]);
         $request->session()->regenerate();
 
         Log::info('Login con certificado realizado correctamente', [

@@ -40,4 +40,8 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/extension-download', [ExtensionDownloadController::class, 'panel'])->name('extension.download.panel');
     Route::post('/extension-download/token', [ExtensionDownloadController::class, 'createToken'])->name('extension.download.token');
+
+    // SSH Servers — one-time password access
+    Route::get('/servidores', [\App\Http\Controllers\SshServerController::class, 'index'])->name('ssh.index');
+    Route::post('/servidores/{service}/token', [\App\Http\Controllers\SshServerController::class, 'requestToken'])->name('ssh.token');
 });

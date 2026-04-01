@@ -10,3 +10,4 @@ Route::post('/validate-certificate', [CertificateValidationController::class, 'v
 Route::post('/validate-access', [AccessValidationController::class, 'validateAccess']);
 Route::post('/validate-key', [KeyValidationController::class, 'validateKey']);
 Route::post('/get-credentials', [CredentialApiController::class, 'getCredentials']);
+Route::post('/ssh/validate', [\App\Http\Controllers\Api\SshValidationController::class, 'validate']);
