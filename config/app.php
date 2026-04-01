@@ -15,6 +15,9 @@ return [
 
     'name' => env('APP_NAME', 'Laravel'),
 
+    // Clave secreta para el endpoint admin de registro de servidores SSH
+    'admin_api_key' => env('HAWCERT_ADMIN_API_KEY', null),
+
     /*
     |--------------------------------------------------------------------------
     | Application Environment
