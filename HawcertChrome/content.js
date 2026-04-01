@@ -18,6 +18,7 @@
   let isFilling = false;
   let currentUrl = window.location.href;
   let filledFields = new Set(); // Para evitar rellenar múltiples veces
+  let userCancelled = false;    // true tras pulsar "No/Cancelar" — evita reaparecer hasta navegación
 
   // Patrones comunes para detectar campos de usuario/email
   const USERNAME_PATTERNS = [
@@ -71,8 +72,8 @@
     if (url !== lastUrl) {
       lastUrl = url;
       currentUrl = url;
-      filledFields.clear(); // Limpiar campos rellenados al cambiar de página
-      // Esperar un poco para que la página cargue
+      filledFields.clear();
+      userCancelled = false; // Resetear al navegar (SPA)
       setTimeout(checkAndFill, 1500);
     }
   }).observe(document, { subtree: true, childList: true });
@@ -127,6 +128,7 @@
    */
   async function checkAndFill(manual = false) {
     if (isFilling) return false;
+    if (!manual && userCancelled) return false; // Usuario canceló — no reaparecer hasta navegación
 
     log('checkAndFill iniciado', { url: currentUrl, manual });
 
@@ -167,7 +169,21 @@
         });
         if (resp && resp.success && resp.credentials) {
           showSecureOverlay();
-          await fillCredentials(resp.credentials);
+          // Guardar snapshot antes de que fillCredentials borre los datos en memoria.
+          // Reintentar hasta 6 veces (por si el campo contraseña tarda en renderizarse — macOS Chrome/React)
+          const credSnapshot = { ...resp.credentials };
+          let filled = false;
+          for (let attempt = 0; attempt < 6 && !filled; attempt++) {
+            if (attempt > 0) {
+              log('Reintentando relleno dos-pasos, intento', attempt + 1);
+              await new Promise(r => setTimeout(r, 700));
+            }
+            filled = await fillCredentials({ ...credSnapshot });
+          }
+          if (!filled) {
+            log('No se pudo rellenar tras 6 intentos — ocultando overlay');
+            removeSecureOverlay();
+          }
         }
         return true;
       }
@@ -254,7 +270,7 @@
       button:disabled { opacity: 0.7; cursor: not-allowed !important; }
     `;
 
-    btnNo.onclick = () => host.remove();
+    btnNo.onclick = () => { host.remove(); userCancelled = true; };
     
     btnYes.onclick = async () => {
       btnYes.textContent = 'Inyectando...';
@@ -372,7 +388,7 @@
     const btnCancel = document.createElement('button');
     btnCancel.textContent = 'Cancelar';
     btnCancel.style.cssText = 'width: 100%; padding: 6px 14px; border: 1px solid #d1d5db; background: #fff; color: #374151; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; margin-top: 4px;';
-    btnCancel.onclick = () => host.remove();
+    btnCancel.onclick = () => { host.remove(); userCancelled = true; };
 
     container.appendChild(title);
     container.appendChild(msg);
@@ -490,50 +506,71 @@
   }
 
   /**
-   * Rellena un campo y dispara eventos para que el sitio detecte el cambio
+   * Rellena un campo y dispara eventos para que el sitio detecte el cambio.
+   * Orden de métodos optimizado para macOS Chrome + React/Angular/Vue:
+   *   1. Native prototype setter (siempre — bypassa overrides de React/Vue)
+   *   2. execCommand como fallback adicional
+   *   3. Asignación directa como último recurso
    */
   function fillFieldAndTrigger(field, value, label) {
     if (!field || value == null) return;
+
     field.focus();
 
-    // Método 1: execCommand — genera eventos nativos (isTrusted=true en algunos contextos)
-    // Funciona en macOS Chrome con React/Angular y evita bloqueos de seguridad del browser
-    let filledOk = false;
+    // Método 1: setter nativo del prototipo — funciona en macOS Chrome con React/Vue/Angular
+    // porque bypassa el override de React sobre la propiedad value
+    let usedNativeSetter = false;
     try {
-      field.select();
-      filledOk = document.execCommand('insertText', false, value);
-    } catch (e) {
-      filledOk = false;
+      const proto = field.tagName === 'TEXTAREA'
+        ? window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement.prototype;
+      const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (nativeSetter) {
+        nativeSetter.call(field, value);
+        usedNativeSetter = true;
+      }
+    } catch (e) {}
+
+    // Método 2: execCommand — puede generar eventos isTrusted en algunos contextos
+    // Lo usamos como refuerzo aunque el valor ya esté puesto
+    let execOk = false;
+    if (!usedNativeSetter || field.value !== value) {
+      try {
+        field.select();
+        execOk = document.execCommand('insertText', false, value);
+      } catch (e) {}
     }
 
-    // Método 2: setter nativo del prototipo (React/Vue/Angular)
-    if (!filledOk || field.value !== value) {
-      try {
-        const proto = field.tagName === 'TEXTAREA'
-          ? window.HTMLTextAreaElement.prototype
-          : window.HTMLInputElement.prototype;
-        const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-        if (nativeSetter) {
-          nativeSetter.call(field, value);
-        } else {
-          field.value = value;
-        }
-      } catch (e) {
-        field.value = value;
-      }
+    // Método 3: último recurso
+    if (field.value !== value) {
+      field.value = value;
     }
 
     filledFields.add(field);
 
-    // Disparar eventos en orden correcto para que todos los frameworks lo detecten
-    field.dispatchEvent(new Event('focus',    { bubbles: true }));
-    field.dispatchEvent(new InputEvent('input',   { bubbles: true, cancelable: true }));
-    field.dispatchEvent(new Event('change',   { bubbles: true }));
+    // Disparar eventos en el orden correcto para todos los frameworks:
+    // focus → beforeinput (React 17+) → input → change → blur
+    field.dispatchEvent(new Event('focus', { bubbles: true }));
+    try {
+      field.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true, cancelable: true,
+        inputType: 'insertText',
+        data: value,
+      }));
+    } catch (e) {}
+    field.dispatchEvent(new InputEvent('input', {
+      bubbles: true, cancelable: true,
+      inputType: 'insertText',
+      data: value,
+    }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
     field.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'End' }));
     field.dispatchEvent(new KeyboardEvent('keyup',   { bubbles: true, key: 'End' }));
-    field.dispatchEvent(new Event('blur',     { bubbles: true }));
+    field.dispatchEvent(new Event('blur', { bubbles: true }));
 
-    log(label, 'rellenado, valor length=', value.length, 'método execCommand:', filledOk);
+    log(label, 'rellenado, valor length=', value.length,
+        '| nativeSetter:', usedNativeSetter, '| execCommand:', execOk,
+        '| valorFinal ok:', field.value === value);
   }
 
   /**
@@ -600,6 +637,7 @@
       if (hasUser && !hasPass) {
         log('Solo campo usuario: rellenando usuario y buscando botón Siguiente');
         fillFieldAndTrigger(usernameField, credential.username, 'Usuario');
+        preventChromeSave(form, null);
         // Marcar en background (cross-origin safe) que el siguiente paso es la contraseña
         chrome.runtime.sendMessage({ action: 'setTwoStepPending' });
         const nextBtn = form ? findNextButton(form) : findNextButton(document.body);
@@ -626,6 +664,7 @@
       if (!hasUser && hasPass) {
         log('Solo campo contraseña: rellenando contraseña y enviando');
         fillFieldAndTrigger(passwordField, credential.password, 'Contraseña');
+        preventChromeSave(null, passwordField);
         clickSubmitButton(form, credential, passwordField);
         return true;
       }
@@ -634,6 +673,7 @@
       log('Usuario y contraseña en la misma página: rellenando ambos');
       fillFieldAndTrigger(usernameField, credential.username, 'Usuario');
       fillFieldAndTrigger(passwordField, credential.password, 'Contraseña');
+      preventChromeSave(form, passwordField);
 
       clickSubmitButton(form, credential, passwordField);
       return true;
@@ -717,6 +757,35 @@
     }
 
     return true;
+  }
+
+  /**
+   * Previene que Chrome ofrezca guardar la contraseña.
+   * Si Chrome guarda la contraseña, cualquiera con acceso al navegador podría entrar
+   * sin el certificado, lo que anularía la seguridad del sistema.
+   * Técnica: marcar el campo con autocomplete="new-password" (Chrome lo trata como
+   * campo de registro, no de login, y no lo guarda como credencial de acceso).
+   */
+  function preventChromeSave(form, passwordField) {
+    try {
+      if (passwordField) {
+        passwordField.setAttribute('autocomplete', 'new-password');
+      }
+      if (form) {
+        form.setAttribute('autocomplete', 'off');
+        // También marcar todos los inputs de texto/email del formulario
+        form.querySelectorAll('input[type="text"], input[type="email"], input[type="tel"]')
+          .forEach(f => f.setAttribute('autocomplete', 'off'));
+      }
+      // Si no hay form explícito, buscar el form del campo contraseña
+      if (!form && passwordField) {
+        const parentForm = passwordField.closest('form');
+        if (parentForm) parentForm.setAttribute('autocomplete', 'off');
+      }
+      log('preventChromeSave: autocomplete desactivado');
+    } catch (e) {
+      log('preventChromeSave error (ignorado):', e.message);
+    }
   }
 
   /**
