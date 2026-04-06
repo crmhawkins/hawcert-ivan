@@ -6,8 +6,6 @@ use App\Models\Certificate;
 use App\Models\Credential;
 use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 
 class CredentialController extends Controller
 {
@@ -90,8 +88,6 @@ class CredentialController extends Controller
         ]);
 
         $credential->certificates()->sync($validated['certificate_ids'] ?? []);
-
-        $this->syncToExternalServices($credential);
 
         return redirect()->route('credentials.index')
             ->with('success', 'Credencial creada exitosamente.');
@@ -179,8 +175,6 @@ class CredentialController extends Controller
         $credential->update($update);
         $credential->certificates()->sync($validated['certificate_ids'] ?? []);
 
-        $this->syncToExternalServices($credential);
-
         return redirect()->route('credentials.index')
             ->with('success', 'Credencial actualizada exitosamente.');
     }
@@ -194,42 +188,5 @@ class CredentialController extends Controller
 
         return redirect()->route('credentials.index')
             ->with('success', 'Credencial eliminada exitosamente.');
-    }
-
-    /**
-     * Sincroniza la credencial con servicios externos configurados.
-     * Actualmente: GestorCorreo (si la URL del servicio coincide).
-     */
-    private function syncToExternalServices(Credential $credential): void
-    {
-        if ($credential->auth_type !== Credential::AUTH_TYPE_FORM) {
-            return;
-        }
-
-        $syncUrl    = env('GESTORCORREO_SYNC_URL', '');
-        $syncSecret = env('GESTORCORREO_SYNC_SECRET', '');
-        $domain     = env('GESTORCORREO_DOMAIN', 'correos.hawkins.es');
-
-        if (!$syncUrl || !$syncSecret) {
-            return;
-        }
-
-        // Solo sincronizar si el patrón de URL coincide con el dominio de GestorCorreo
-        if (!str_contains((string) $credential->website_url_pattern, $domain)) {
-            return;
-        }
-
-        try {
-            Http::timeout(5)->post($syncUrl, [
-                'secret'   => $syncSecret,
-                'username' => $credential->username,
-                'password' => $credential->password,
-            ]);
-        } catch (\Exception $e) {
-            Log::warning('[HawCert] Error sincronizando credencial con GestorCorreo', [
-                'credential_id' => $credential->id,
-                'error'         => $e->getMessage(),
-            ]);
-        }
     }
 }
