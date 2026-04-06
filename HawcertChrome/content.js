@@ -18,7 +18,20 @@
   let isFilling = false;
   let currentUrl = window.location.href;
   let filledFields = new Set(); // Para evitar rellenar múltiples veces
-  let userCancelled = false;    // true tras pulsar "No/Cancelar" — evita reaparecer hasta navegación
+
+  // Estado "cancelado" por origen almacenado en chrome.storage.session.
+  // Persiste aunque la URL cambie (SPAs) hasta que el usuario rellene manualmente.
+  const _cancelKey = () => `hawcert_cancelled_${location.origin}`;
+  async function isCancelled() {
+    const r = await chrome.storage.session.get(_cancelKey());
+    return !!r[_cancelKey()];
+  }
+  async function setCancelled() {
+    await chrome.storage.session.set({ [_cancelKey()]: true });
+  }
+  async function clearCancelled() {
+    await chrome.storage.session.remove(_cancelKey());
+  }
 
   // Patrones comunes para detectar campos de usuario/email
   const USERNAME_PATTERNS = [
@@ -73,7 +86,6 @@
       lastUrl = url;
       currentUrl = url;
       filledFields.clear();
-      userCancelled = false; // Resetear al navegar (SPA)
       setTimeout(checkAndFill, 1500);
     }
   }).observe(document, { subtree: true, childList: true });
@@ -128,7 +140,7 @@
    */
   async function checkAndFill(manual = false) {
     if (isFilling) return false;
-    if (!manual && userCancelled) return false; // Usuario canceló — no reaparecer hasta navegación
+    if (!manual && await isCancelled()) return false; // Usuario canceló — no reaparecer en esta sesión
 
     log('checkAndFill iniciado', { url: currentUrl, manual });
 
@@ -139,7 +151,8 @@
       }
 
       if (manual) {
-        // Flujo Manual: Obtenemos contraseñas directamente sin confirmación extra
+        // Flujo Manual: limpiar el estado cancelado y rellenar directamente
+        await clearCancelled();
         const response = await new Promise((resolve, reject) => {
           chrome.runtime.sendMessage(
             { action: 'getCredentials', url: currentUrl, manual: true },
@@ -270,7 +283,7 @@
       button:disabled { opacity: 0.7; cursor: not-allowed !important; }
     `;
 
-    btnNo.onclick = () => { host.remove(); userCancelled = true; };
+    btnNo.onclick = async () => { host.remove(); await setCancelled(); };
     
     btnYes.onclick = async () => {
       btnYes.textContent = 'Inyectando...';
@@ -388,7 +401,7 @@
     const btnCancel = document.createElement('button');
     btnCancel.textContent = 'Cancelar';
     btnCancel.style.cssText = 'width: 100%; padding: 6px 14px; border: 1px solid #d1d5db; background: #fff; color: #374151; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; margin-top: 4px;';
-    btnCancel.onclick = () => { host.remove(); userCancelled = true; };
+    btnCancel.onclick = async () => { host.remove(); await setCancelled(); };
 
     container.appendChild(title);
     container.appendChild(msg);
