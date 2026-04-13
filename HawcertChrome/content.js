@@ -648,33 +648,43 @@
 
       // ——— Flujo: solo contraseña (segunda página tras haber puesto usuario) ———
       if (!hasUser && hasPass) {
-        log('Solo campo contraseña: rellenando contraseña y enviando');
-        fillFieldAndTrigger(passwordField, credential.password, 'Contraseña');
-        preventChromeSave(null, passwordField);
-        clickSubmitButton(form, credential, passwordField);
+        log('Solo campo contraseña: fill-late → submit → wipe');
+        const deferredPasswordFill = () => {
+          fillFieldAndTrigger(passwordField, credential.password, 'Contraseña');
+          preventChromeSave(null, passwordField);
+        };
+        clickSubmitButton(form, credential, passwordField, deferredPasswordFill);
         return true;
       }
 
       // ——— Flujo: usuario y contraseña en la misma página ———
-      log('Usuario y contraseña en la misma página: rellenando ambos');
+      log('Usuario y contraseña en la misma página: username ahora, password fill-late');
       fillFieldAndTrigger(usernameField, credential.username, 'Usuario');
-      fillFieldAndTrigger(passwordField, credential.password, 'Contraseña');
-      preventChromeSave(form, passwordField);
 
-      clickSubmitButton(form, credential, passwordField);
+      const deferredPasswordFill = () => {
+        fillFieldAndTrigger(passwordField, credential.password, 'Contraseña');
+        preventChromeSave(form, passwordField);
+      };
+      clickSubmitButton(form, credential, passwordField, deferredPasswordFill);
       return true;
     } catch (error) {
       logError('Error al rellenar credenciales', error);
       return false;
     } finally {
       isFilling = false;
-      
+
       // WIPE MEMORY: Destrucción de datos sensibles de la memoria RAM JIT
       if (credential) {
          credential.username = '***WIPED***';
          credential.password = '***WIPED***';
       }
-      
+
+      // WIPE DOM: red de seguridad — si el wipe síncrono tras submit no se ejecutó
+      // (excepción, ruta alternativa), borrar la contraseña del campo ahora
+      if (passwordField) {
+         wipePasswordField(passwordField);
+      }
+
       // Retirada del overlay si falla la navegación web (fallback tras 5 segundos)
       setTimeout(() => {
          removeSecureOverlay();
@@ -811,60 +821,94 @@
   }
 
   /**
+   * Borra el valor de la contraseña del DOM inmediatamente.
+   * Usa el native setter para que funcione con React/Vue/Angular.
+   * No dispara eventos — no queremos que el framework reaccione al borrado.
+   */
+  function wipePasswordField(passwordField) {
+    if (!passwordField) return;
+    try {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value'
+      )?.set;
+      if (nativeSetter) nativeSetter.call(passwordField, '');
+      passwordField.value = '';
+      log('wipePasswordField: contraseña borrada del DOM');
+    } catch (e) {
+      try { passwordField.value = ''; } catch (_) {}
+    }
+  }
+
+  /**
    * Busca y pulsa el botón de envío, o envía el formulario por Enter/submit()
    */
-  function clickSubmitButton(form, credential, passwordField) {
+  /**
+   * @param {HTMLElement|null} form
+   * @param {object} credential
+   * @param {HTMLElement|null} passwordField
+   * @param {Function|null} beforeSubmit — callback síncrono que rellena la contraseña justo antes del click
+   */
+  function clickSubmitButton(form, credential, passwordField, beforeSubmit) {
     const doClick = (btn, desc) => {
       if (!btn) return false;
       log('Pulsando botón de envío:', desc, btn.textContent?.trim() || btn.value);
+      // --- SECCIÓN CRÍTICA: fill → click → wipe sin ceder al event loop ---
+      if (beforeSubmit) beforeSubmit();
       btn.focus();
       btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
       btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
       btn.click();
+      wipePasswordField(passwordField);
+      // --- FIN SECCIÓN CRÍTICA ---
       return true;
     };
 
-    setTimeout(() => {
-      let submitButton = null;
-      const root = form || document;
+    let submitButton = null;
+    const root = form || document;
 
-      if (credential.submit_button_selector) {
-        submitButton = root.querySelector(credential.submit_button_selector);
-        if (submitButton) {
-          doClick(submitButton, 'selector configurado');
-          return;
-        }
+    if (credential.submit_button_selector) {
+      submitButton = root.querySelector(credential.submit_button_selector);
+      if (submitButton) {
+        doClick(submitButton, 'selector configurado');
+        return;
       }
+    }
 
-      submitButton = form ? findSubmitButton(form) : findSubmitButton(document);
-      if (doClick(submitButton, 'detección automática')) return;
+    submitButton = form ? findSubmitButton(form) : findSubmitButton(document);
+    if (doClick(submitButton, 'detección automática')) return;
 
-      if (form) {
-        const submitEvent = new Event('submit', { bubbles: true, cancelable: true });
-        const submitted = form.dispatchEvent(submitEvent);
-        if (submitted) {
-          try {
-            form.submit();
-            log('Formulario enviado con form.submit()');
-          } catch (e) {
-            log('form.submit() falló, simulando Enter en contraseña');
-            if (passwordField) {
-              ['keydown', 'keyup', 'keypress'].forEach(type => {
-                passwordField.dispatchEvent(new KeyboardEvent(type, {
-                  key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true
-                }));
-              });
-            }
+    if (form) {
+      if (beforeSubmit) beforeSubmit();
+      const submitEvent = new Event('submit', { bubbles: true, cancelable: true });
+      const submitted = form.dispatchEvent(submitEvent);
+      if (submitted) {
+        try {
+          form.submit();
+          log('Formulario enviado con form.submit()');
+        } catch (e) {
+          log('form.submit() falló, simulando Enter en contraseña');
+          if (passwordField) {
+            ['keydown', 'keyup', 'keypress'].forEach(type => {
+              passwordField.dispatchEvent(new KeyboardEvent(type, {
+                key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true
+              }));
+            });
           }
-        } else {
-          log('El formulario canceló el evento submit');
         }
       } else {
-        const anySubmit = findSubmitButton(document);
-        if (anySubmit) doClick(anySubmit, 'en documento');
-        else log('No se encontró formulario ni botón de envío');
+        log('El formulario canceló el evento submit');
       }
-    }, 300);
+      wipePasswordField(passwordField);
+    } else {
+      const anySubmit = findSubmitButton(document);
+      if (anySubmit) {
+        doClick(anySubmit, 'en documento');
+      } else {
+        if (beforeSubmit) beforeSubmit();
+        wipePasswordField(passwordField);
+        log('No se encontró formulario ni botón de envío');
+      }
+    }
   }
 
 
