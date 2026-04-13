@@ -6,6 +6,9 @@ const DEFAULT_CONFIG = {
   certificate: null,
 };
 
+// Permitir que content scripts accedan a chrome.storage.session
+chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' });
+
 // Inicializar configuración
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get(['config'], (result) => {

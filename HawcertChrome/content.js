@@ -78,7 +78,7 @@
     'Siguiente paso', 'Next step', 'Continuar con', 'Continue with'
   ];
 
-  // Detectar cuando la página cambia (SPA)
+  // Detectar cuando la página cambia (SPA) — actualizar URL pero no rellenar automáticamente
   let lastUrl = location.href;
   new MutationObserver(() => {
     const url = location.href;
@@ -86,7 +86,6 @@
       lastUrl = url;
       currentUrl = url;
       filledFields.clear();
-      setTimeout(checkAndFill, 1500);
     }
   }).observe(document, { subtree: true, childList: true });
 
@@ -106,33 +105,7 @@
     }
   }
 
-  // Verificar y rellenar cuando la página carga
-  // Dar tiempo al service worker para activarse
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      setTimeout(checkAndFill, 2000);
-    });
-  } else {
-    setTimeout(checkAndFill, 2000);
-  }
-
-  // Observar cuando aparecen nuevos formularios
-  const formObserver = new MutationObserver(() => {
-    if (!isFilling) {
-      setTimeout(checkAndFill, 500);
-    }
-  });
-
-  const startFormObserver = () => {
-    if (document.body) {
-      formObserver.observe(document.body, { childList: true, subtree: true });
-    } else {
-      document.addEventListener('DOMContentLoaded', () => {
-        formObserver.observe(document.body, { childList: true, subtree: true });
-      });
-    }
-  };
-  startFormObserver();
+  // No se rellena automáticamente: el usuario debe pulsar "Rellenar ahora" en el popup.
 
   /**
    * Verifica si hay credenciales para esta URL y las rellena (o pregunta).
@@ -776,26 +749,62 @@
    * Previene que Chrome ofrezca guardar la contraseña.
    * Si Chrome guarda la contraseña, cualquiera con acceso al navegador podría entrar
    * sin el certificado, lo que anularía la seguridad del sistema.
-   * Técnica: marcar el campo con autocomplete="new-password" (Chrome lo trata como
-   * campo de registro, no de login, y no lo guarda como credencial de acceso).
+   *
+   * Técnica principal: convertir input[type="password"] a input[type="text"] con
+   * -webkit-text-security:disc (visualmente idéntico a puntos, pero Chrome no lo
+   * reconoce como campo de contraseña y no ofrece guardarlo).
+   * Además, aleatorizar el atributo name del campo para que las heurísticas de
+   * Chrome no lo asocien con un login.
    */
   function preventChromeSave(form, passwordField) {
     try {
       if (passwordField) {
-        passwordField.setAttribute('autocomplete', 'new-password');
+        // Guardar el name original para que el submit funcione, restaurándolo justo antes
+        const originalName = passwordField.getAttribute('name');
+        const randomName = '_hc_' + Math.random().toString(36).slice(2, 10);
+
+        // Cambiar tipo a text para que Chrome no lo detecte como contraseña
+        passwordField.setAttribute('type', 'text');
+        // Ocultar el texto con CSS (se ve como puntos, igual que un password)
+        passwordField.style.setProperty('-webkit-text-security', 'disc', 'important');
+        passwordField.style.setProperty('text-security', 'disc', 'important');
+        // Aleatorizar name para confundir las heurísticas del gestor de contraseñas
+        passwordField.setAttribute('name', randomName);
+        passwordField.setAttribute('autocomplete', 'off');
+
+        // Restaurar el name original justo antes del submit para que el servidor lo reciba
+        const restoreAndSubmit = () => {
+          if (originalName) passwordField.setAttribute('name', originalName);
+        };
+        if (form) {
+          form.addEventListener('submit', restoreAndSubmit, { once: true, capture: true });
+        }
+        // Fallback: restaurar antes de la navegación
+        window.addEventListener('beforeunload', restoreAndSubmit, { once: true });
+
+        // Impedir que Chrome o el sitio reviertan el tipo a password
+        const typeGuard = new MutationObserver((mutations) => {
+          for (const m of mutations) {
+            if (m.attributeName === 'type' && passwordField.type === 'password') {
+              passwordField.setAttribute('type', 'text');
+            }
+          }
+        });
+        typeGuard.observe(passwordField, { attributes: true, attributeFilter: ['type'] });
+        // Limpiar el observer tras la navegación
+        window.addEventListener('beforeunload', () => typeGuard.disconnect(), { once: true });
       }
+
       if (form) {
         form.setAttribute('autocomplete', 'off');
-        // También marcar todos los inputs de texto/email del formulario
         form.querySelectorAll('input[type="text"], input[type="email"], input[type="tel"]')
           .forEach(f => f.setAttribute('autocomplete', 'off'));
       }
-      // Si no hay form explícito, buscar el form del campo contraseña
       if (!form && passwordField) {
         const parentForm = passwordField.closest('form');
         if (parentForm) parentForm.setAttribute('autocomplete', 'off');
       }
-      log('preventChromeSave: autocomplete desactivado');
+      log('preventChromeSave: campo password convertido a text+disc, name aleatorizado');
     } catch (e) {
       log('preventChromeSave error (ignorado):', e.message);
     }
