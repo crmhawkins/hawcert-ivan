@@ -105,7 +105,23 @@
     }
   }
 
-  // No se rellena automáticamente: el usuario debe pulsar "Rellenar ahora" en el popup.
+  // No se rellena automáticamente salvo en el flujo dos-pasos:
+  // si en la página anterior se rellenó el usuario, aquí detectamos el flag
+  // pendiente y rellenamos la contraseña sin intervención del usuario.
+  function triggerTwoStepIfPending() {
+    chrome.runtime.sendMessage({ action: 'checkAndClearTwoStepPending' }, (resp) => {
+      if (chrome.runtime.lastError) return;
+      if (resp && resp.pending) {
+        log('Flujo dos pasos pendiente detectado al cargar la página — disparando checkAndFill automático');
+        checkAndFill(false).catch(err => logError('Error en auto-trigger dos pasos', err));
+      }
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', triggerTwoStepIfPending, { once: true });
+  } else {
+    triggerTwoStepIfPending();
+  }
 
   /**
    * Verifica si hay credenciales para esta URL y las rellena (o pregunta).
@@ -876,6 +892,12 @@
 
     submitButton = form ? findSubmitButton(form) : findSubmitButton(document);
     if (doClick(submitButton, 'detección automática')) return;
+
+    // Fallback: algunos sitios (IONOS, Microsoft, Google...) usan "Siguiente"/"Next"
+    // como botón de envío también en la página de contraseña. Si no hemos encontrado
+    // un botón con los patrones de login, probamos con los patrones de "Siguiente".
+    const nextBtn = form ? findNextButton(form) : findNextButton(document.body);
+    if (doClick(nextBtn, 'botón Siguiente como submit')) return;
 
     if (form) {
       if (beforeSubmit) beforeSubmit();
