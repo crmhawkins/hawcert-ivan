@@ -664,24 +664,39 @@
 
       // ——— Flujo: solo contraseña (segunda página tras haber puesto usuario) ———
       if (!hasUser && hasPass) {
-        log('Solo campo contraseña: fill-late → submit → wipe');
-        const deferredPasswordFill = () => {
-          fillFieldAndTrigger(passwordField, credential.password, 'Contraseña');
-          preventChromeSave(null, passwordField);
-        };
-        clickSubmitButton(form, credential, passwordField, deferredPasswordFill);
+        log('Solo campo contraseña: fill → wait-react → submit → wipe');
+        // 1) Rellenar la contraseña AHORA (no diferido). Esto dispara los eventos
+        //    'input'/'change' que React usa para actualizar su state interno.
+        fillFieldAndTrigger(passwordField, credential.password, 'Contraseña');
+        // 2) Esperar a que React procese el input event y actualice su state.
+        //    Sin este delay, React lee state VIEJO (vacío) en el onClick handler
+        //    del submit y cancela el envío con "Introduzca su contraseña" (IONOS).
+        //    requestAnimationFrame asegura que al menos 1 frame ha pasado y el
+        //    setTimeout añade un margen para el flushing de React 18.
+        await new Promise(r => requestAnimationFrame(r));
+        await new Promise(r => setTimeout(r, 60));
+        // 3) Ahora sí: click submit. React lee el state correcto y envía.
+        //    NO usamos preventChromeSave aquí porque muta type/name y rompe
+        //    el controlled input de React. Como wipeamos inmediatamente después
+        //    del submit, Chrome no llega a ver el valor para ofrecer guardar.
+        clickSubmitButton(form, credential, passwordField, null);
+        // 4) Pequeño delay antes del wipe para que el submit haya tenido
+        //    tiempo de leer el value del field.
+        await new Promise(r => setTimeout(r, 40));
+        wipePasswordField(passwordField);
         return true;
       }
 
       // ——— Flujo: usuario y contraseña en la misma página ———
-      log('Usuario y contraseña en la misma página: username ahora, password fill-late');
+      log('Usuario y contraseña en la misma página: username → password → wait-react → submit → wipe');
       fillFieldAndTrigger(usernameField, credential.username, 'Usuario');
-
-      const deferredPasswordFill = () => {
-        fillFieldAndTrigger(passwordField, credential.password, 'Contraseña');
-        preventChromeSave(form, passwordField);
-      };
-      clickSubmitButton(form, credential, passwordField, deferredPasswordFill);
+      // Mismo patrón que la rama "solo contraseña": rellenar, esperar a React, click, wipe.
+      fillFieldAndTrigger(passwordField, credential.password, 'Contraseña');
+      await new Promise(r => requestAnimationFrame(r));
+      await new Promise(r => setTimeout(r, 60));
+      clickSubmitButton(form, credential, passwordField, null);
+      await new Promise(r => setTimeout(r, 40));
+      wipePasswordField(passwordField);
       return true;
     } catch (error) {
       logError('Error al rellenar credenciales', error);
