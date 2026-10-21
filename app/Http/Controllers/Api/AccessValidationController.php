@@ -126,7 +126,7 @@ class AccessValidationController extends Controller
             Log::info('✅ Certificado validado exitosamente', [
                 'user_id' => $certificate->user_id,
                 'user_email' => $certificate->email,
-                'access_key' => $accessKey->key,
+                'access_key_id' => $accessKey->id,
             ]);
 
             return response()->json([
@@ -175,8 +175,13 @@ class AccessValidationController extends Controller
                 ->with(['user', 'services', 'permissions'])
                 ->first();
             
-            if ($certificate) {
-                return $certificate;
+            // The common name is a lookup hint, never certificate identity.
+            if ($certificate && is_string($certificate->x509_certificate)) {
+                $storedCertificate = @openssl_x509_read($certificate->x509_certificate);
+                $storedFingerprint = $storedCertificate ? openssl_x509_fingerprint($storedCertificate, 'sha256') : false;
+                if (is_string($storedFingerprint) && hash_equals(strtolower($storedFingerprint), strtolower($fingerprint))) {
+                    return $certificate;
+                }
             }
         }
 
