@@ -1,0 +1,7 @@
+# /etc/sudoers.d/hawuser2026-nopasswd — sudo RESTRINGIDO para el usuario de acceso por HawCert.
+# Sustituye al antiguo "ALL=(ALL) NOPASSWD: ALL". hawuser2026 ya NO pertenece a los grupos sudo ni docker.
+# El único docker que puede ejecutar es el envoltorio /usr/local/sbin/docker (política en ese script).
+Defaults:hawuser2026 !lecture, env_reset, secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Cmnd_Alias HAWCERT_DOCKER = /usr/local/sbin/docker *
+Cmnd_Alias HAWCERT_RO     = /usr/bin/journalctl *, /usr/bin/systemctl status *, /usr/bin/ls *, /usr/bin/df *, /usr/bin/du *, /usr/bin/free *
+hawuser2026 ALL=(root) NOPASSWD: HAWCERT_DOCKER, HAWCERT_RO
