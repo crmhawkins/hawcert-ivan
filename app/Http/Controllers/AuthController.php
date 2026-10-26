@@ -157,40 +157,30 @@ class AuthController extends Controller
      */
     private function findCertificateForLogin(string $certificatePem, array $certInfo, string $fingerprint): ?Certificate
     {
-        // Buscar por Common Name
-        if (isset($certInfo['subject']['CN'])) {
-            $certificate = Certificate::where('common_name', $certInfo['subject']['CN'])
-                ->with(['user'])
-                ->first();
+        // Buscar por fingerprint primero (match exacto, independiente de CN duplicados)
+        $certificates = Certificate::whereNotNull('x509_certificate')->with('user')->get();
 
-            if ($certificate) {
-                return $certificate;
+        foreach ($certificates as $certModel) {
+            try {
+                $storedCert = @openssl_x509_read($certModel->x509_certificate);
+                if ($storedCert) {
+                    $storedFingerprint = openssl_x509_fingerprint($storedCert, 'sha256');
+                    if (is_string($storedFingerprint) && hash_equals(strtolower($storedFingerprint), strtolower($fingerprint))) {
+                        return $certModel;
+                    }
+                }
+            } catch (\Exception $e) {
+                continue;
             }
         }
 
-        // Buscar comparando el contenido PEM
-        $certificates = Certificate::whereNotNull('x509_certificate')->with('user')->get();
+        // Fallback: buscar comparando el contenido PEM
         $normalizedPem = $this->normalizePem($certificatePem);
 
         foreach ($certificates as $certModel) {
             $storedPem = $this->normalizePem($certModel->x509_certificate);
             if ($storedPem === $normalizedPem) {
                 return $certModel;
-            }
-        }
-
-        // Buscar por fingerprint
-        foreach ($certificates as $certModel) {
-            try {
-                $storedCert = @openssl_x509_read($certModel->x509_certificate);
-                if ($storedCert) {
-                    $storedFingerprint = openssl_x509_fingerprint($storedCert, 'sha256');
-                    if (strtolower($storedFingerprint) === strtolower($fingerprint)) {
-                        return $certModel;
-                    }
-                }
-            } catch (\Exception $e) {
-                continue;
             }
         }
 
