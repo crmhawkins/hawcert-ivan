@@ -83,6 +83,21 @@ class AccessValidationController extends Controller
                 ], 400);
             }
 
+            // Los servicios de tipo «api» exigen prueba de posesión de la clave privada:
+            // aquí solo llega el certificado público, así que no se emite key para ellos.
+            if (Service::where('slug', $serviceSlug)->first()?->isApi()) {
+                Log::warning('validate-access rechazado: servicio API exige clave firmada', [
+                    'certificate_id' => $certificate->id,
+                    'service_slug' => $serviceSlug,
+                    'client_ip' => $clientIp,
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Este servicio solo admite claves firmadas con la clave privada del certificado (/api/signed-key/issue).',
+                ], 403);
+            }
+
             // Verificar que el certificado tenga acceso al servicio
             if (!$certificate->hasService($serviceSlug)) {
                 Log::warning('Intento de acceso a servicio no autorizado', [

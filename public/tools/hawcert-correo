@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# =============================================================================
+# hawcert-correo — lectura (SOLO LECTURA) de los buzones de Hawkins Mail
+# (correos.hawkins.es) con tu certificado HawCert. Sin contraseñas ni tokens que
+# copiar: el script firma un reto con la clave privada de tu .pem (que no sale de
+# tu equipo) y HawCert devuelve una clave de UN SOLO USO y 2 minutos para el
+# servicio «correo-api». Cada orden pide una clave nueva.
+# No marca nada como leído, no mueve ni borra nada: lo que ve cada persona en su
+# bandeja no cambia.
+#
+#   Uso:
+#     hawcert-correo buzones [--comprobar]
+#     hawcert-correo carpetas <buzón>
+#     hawcert-correo buscar <buzón> [texto] [--de X] [--asunto X] [--desde AAAA-MM-DD]
+#                           [--hasta AAAA-MM-DD] [--carpeta INBOX|Spam|todas] [--no-leidos] [--limite N]
+#     hawcert-correo leer <buzón> <id> [--html]
+#     hawcert-correo adjunto <buzón> <id> <n> > fichero
+#
+#   Ej.:   hawcert-correo buscar administracion@hawkins.es didww --desde 2026-10-20 --limite 5
+#          hawcert-correo leer administracion@hawkins.es 1234.1700000001.SU5CT1g
+#          hawcert-correo adjunto administracion@hawkins.es 1234.1700000001.SU5CT1g 1 > factura.pdf
+#
+#   «buscar» mira por defecto los últimos 30 días de INBOX (--desde para ir más atrás,
+#   --carpeta todas para incluir Spam y el resto) y devuelve 20 resultados, los más
+#   recientes primero. Se lee en vivo del servidor de correo: un mensaje que acaba de
+#   llegar sale ya. La salida es JSON.
+#
+#   Config (variables de entorno):
+#     HAWCERT_PEM          ruta a tu .pem de HawCert (cert + clave). Defecto: ~/.hawcert/cert.pem
+#     HAWCERT_URL          URL de HawCert.                           Defecto: https://hawcert.hawkins.es
+#     HAWCERT_CORREO_URL   URL de Hawkins Mail.                      Defecto: https://correos.hawkins.es
+#
+#   Requiere: openssl, curl (Git Bash en Windows, Linux o macOS). python3 opcional (JSON legible).
+#   Descarga: curl -fsSL https://hawcert.hawkins.es/tools/hawcert-correo -o ~/.hawcert/hawcert-correo && chmod +x ~/.hawcert/hawcert-correo
+# =============================================================================
+set -euo pipefail
+
+HAWCERT_URL="${HAWCERT_URL:-https://hawcert.hawkins.es}"
+HAWCERT_PEM="${HAWCERT_PEM:-$HOME/.hawcert/cert.pem}"
+HAWCERT_CORREO_URL="${HAWCERT_CORREO_URL:-https://correos.hawkins.es}"
+SERVICE_SLUG="correo-api"
+
+die() { echo "hawcert-correo: $*" >&2; exit 1; }
+usage() { sed -n '/^#   Uso:/,/^#   Ej\./p' "$0" | sed '$d; s/^#//' >&2; exit 2; }
+
+[ $# -ge 1 ] || usage
+CMD="$1"; shift
+
+# ── argumentos → parámetros de la API ─────────────────────────────────────────
+Q=()          # pares para curl --data-urlencode
+API_PATH=""
+BINARY=0
+need_value() { [ $# -ge 2 ] && [ -n "$2" ] || die "falta el valor de $1"; }
+
+case "$CMD" in
+  buzones)
+    API_PATH="buzones"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --comprobar) Q+=("comprobar=1") ;;
+        *) die "opción desconocida para buzones: $1" ;;
+      esac; shift
+    done ;;
+  carpetas)
+    [ $# -eq 1 ] || die "uso: hawcert-correo carpetas <buzón>"
+    API_PATH="carpetas"; Q+=("buzon=$1") ;;
+  buscar)
+    [ $# -ge 1 ] || die "uso: hawcert-correo buscar <buzón> [texto] [opciones]"
+    API_PATH="buscar"; Q+=("buzon=$1"); shift
+    if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then Q+=("texto=$1"); shift; fi
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --texto)    need_value "$@"; Q+=("texto=$2"); shift ;;
+        --de)       need_value "$@"; Q+=("de=$2"); shift ;;
+        --asunto)   need_value "$@"; Q+=("asunto=$2"); shift ;;
+        --desde)    need_value "$@"; Q+=("desde=$2"); shift ;;
+        --hasta)    need_value "$@"; Q+=("hasta=$2"); shift ;;
+        --carpeta)  need_value "$@"; Q+=("carpeta=$2"); shift ;;
+        --limite)   need_value "$@"; Q+=("limite=$2"); shift ;;
+        --no-leidos) Q+=("no_leidos=1") ;;
+        *) die "opción desconocida para buscar: $1" ;;
+      esac; shift
+    done ;;
+  leer)
+    [ $# -ge 2 ] || die "uso: hawcert-correo leer <buzón> <id> [--html]"
+    API_PATH="leer"; Q+=("buzon=$1" "id=$2"); shift 2
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --html) Q+=("html=1") ;;
+        *) die "opción desconocida para leer: $1" ;;
+      esac; shift
+    done ;;
+  adjunto)
+    [ $# -eq 3 ] || die "uso: hawcert-correo adjunto <buzón> <id> <n> > fichero"
+    API_PATH="adjunto"; BINARY=1; Q+=("buzon=$1" "id=$2" "n=$3")
+    if [ -t 1 ]; then die "el adjunto es binario: redirige la salida a un fichero (… > fichero)"; fi ;;
+  -h|--help|ayuda)
+    usage ;;
+  *)
+    die "orden desconocida «$CMD» (buzones, carpetas, buscar, leer, adjunto)" ;;
+esac
+
+for bin in openssl curl; do command -v "$bin" >/dev/null 2>&1 || die "falta '$bin' en el PATH"; done
+[ -r "$HAWCERT_PEM" ] || die "no encuentro tu certificado HawCert en $HAWCERT_PEM (exporta HAWCERT_PEM o cópialo ahí)"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+chmod 700 "$TMP"
+# En Git Bash (Windows) curl es nativo y no entiende rutas /tmp/...: le pasamos la ruta Windows.
+if command -v cygpath >/dev/null 2>&1; then TMP_NATIVE="$(cygpath -m "$TMP")"; else TMP_NATIVE="$TMP"; fi
+
+# Separamos el .pem: solo el certificado público viaja a HawCert; la clave privada se queda aquí.
+openssl x509 -in "$HAWCERT_PEM" -out "$TMP/cert.pem" 2>/dev/null || die "el fichero $HAWCERT_PEM no contiene un certificado X.509"
+openssl pkey -in "$HAWCERT_PEM" -out "$TMP/key.pem" 2>/dev/null || die "el fichero $HAWCERT_PEM no contiene la clave privada (descarga el .pem completo desde HawCert)"
+chmod 600 "$TMP/key.pem"
+
+have_python() { command -v python3 >/dev/null 2>&1 && python3 -c 'import json' >/dev/null 2>&1; }
+
+# Extrae un campo string de un JSON plano. Con python3 es exacto; si no, sed.
+json_str() {
+  if have_python; then
+    printf '%s' "$1" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin.buffer); v=d.get(sys.argv[1],"")
+except Exception:
+    v=""
+sys.stdout.buffer.write((v if isinstance(v,str) else "").encode("utf-8"))' "$2" 2>/dev/null && return 0
+  fi
+  printf '%s' "$1" | sed -n 's/.*"'"$2"'":"\([^"]*\)".*/\1/p' | head -1 | tr -d '\\'
+}
+
+# ── 1) clave de un solo uso de HawCert (firma del reto con la clave privada) ──
+ch="$(curl -sS --max-time 20 -X POST "$HAWCERT_URL/api/signed-key/challenge" -H 'Accept: application/json')" \
+  || die "no se pudo contactar con HawCert ($HAWCERT_URL)"
+nonce="$(json_str "$ch" nonce)"
+[ -n "$nonce" ] || die "HawCert no devolvió nonce: $ch"
+
+sig="$(printf 'hawcert-signed-key-v1\n%s\n%s' "$nonce" "$SERVICE_SLUG" | openssl dgst -sha256 -sign "$TMP/key.pem" -binary | openssl base64 -A)"
+
+resp="$(curl -sS --max-time 30 -X POST "$HAWCERT_URL/api/signed-key/issue" -H 'Accept: application/json' \
+  --data-urlencode "certificate@$TMP_NATIVE/cert.pem" \
+  --data-urlencode "service_slug=$SERVICE_SLUG" \
+  --data-urlencode "nonce=$nonce" \
+  --data-urlencode "signature=$sig")" || die "error llamando a $HAWCERT_URL/api/signed-key/issue"
+key="$(json_str "$resp" access_key)"
+[ -n "$key" ] || die "HawCert ha rechazado la clave para «$SERVICE_SLUG»: $(json_str "$resp" message)"
+
+# ── 2) llamada a Hawkins Mail ─────────────────────────────────────────────────
+# Codificamos la URL aquí, byte a byte en UTF-8: en Windows, curl nativo recibe los
+# argumentos en la página de códigos ANSI y estropearía tildes y eñes.
+urlencode() {
+  local LC_ALL=C s="$1" out="" c i
+  for (( i=0; i<${#s}; i++ )); do
+    c="${s:i:1}"
+    case "$c" in
+      [a-zA-Z0-9.~_-]) out+="$c" ;;
+      *) out+="$(printf '%%%02X' "'$c")" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+QS=""
+for pair in ${Q[@]+"${Q[@]}"}; do
+  QS+="${QS:+&}$(urlencode "${pair%%=*}")=$(urlencode "${pair#*=}")"
+done
+
+code="$(curl -sS --max-time 180 "$HAWCERT_CORREO_URL/api/correo-api/$API_PATH${QS:+?$QS}" \
+  -H "Authorization: Bearer $key" -H 'Accept: application/json' \
+  -o "$TMP_NATIVE/body" -D "$TMP_NATIVE/headers" -w '%{http_code}')" \
+  || die "no se pudo contactar con Hawkins Mail ($HAWCERT_CORREO_URL)"
+
+if [ "$code" != "200" ]; then
+  msg="$(json_str "$(cat "$TMP/body")" error)"
+  [ -n "$msg" ] || msg="$(json_str "$(cat "$TMP/body")" message)"
+  [ -n "$msg" ] || msg="$(head -c 300 "$TMP/body")"
+  die "Hawkins Mail respondió $code: $msg"
+fi
+
+if [ "$BINARY" = "1" ]; then
+  name="$(sed -n 's/^[Xx]-[Aa]djunto-[Nn]ombre: *//p' "$TMP/headers" | tr -d '\r' | head -1)"
+  if have_python; then name="$(python3 -c 'import sys,urllib.parse; sys.stdout.buffer.write(urllib.parse.unquote(sys.argv[1]).encode("utf-8"))' "$name")"; fi
+  echo "hawcert-correo: adjunto «$name» ($(wc -c < "$TMP/body" | tr -d ' ') bytes)" >&2
+  cat "$TMP/body"
+elif have_python; then
+  python3 -c 'import json,sys
+d=json.load(open(sys.argv[1],"rb"))
+sys.stdout.buffer.write((json.dumps(d,ensure_ascii=False,indent=2)+"\n").encode("utf-8"))' "$TMP/body"
+else
+  cat "$TMP/body"; echo
+fi

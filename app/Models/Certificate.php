@@ -139,6 +139,36 @@ class Certificate extends Model
         return $this->services()->where('slug', $serviceSlug)->exists();
     }
 
+    /**
+     * Localiza el certificado por la huella SHA-256 de su x509 (el CN solo es una pista de búsqueda,
+     * nunca identidad).
+     */
+    public static function findByX509Fingerprint(string $fingerprint, ?string $commonName = null): ?self
+    {
+        $matches = function (self $c) use ($fingerprint): bool {
+            if (!is_string($c->x509_certificate)) {
+                return false;
+            }
+            $stored = @openssl_x509_read($c->x509_certificate);
+            $fp     = $stored ? openssl_x509_fingerprint($stored, 'sha256') : false;
+            return is_string($fp) && hash_equals(strtolower($fp), strtolower($fingerprint));
+        };
+
+        if ($commonName) {
+            foreach (self::where('common_name', $commonName)->get() as $candidate) {
+                if ($matches($candidate)) {
+                    return $candidate;
+                }
+            }
+        }
+        foreach (self::whereNotNull('x509_certificate')->cursor() as $c) {
+            if ($matches($c)) {
+                return $c;
+            }
+        }
+        return null;
+    }
+
     public function hasPermission(string $permissionSlug): bool
     {
         return $this->permissions()->where('slug', $permissionSlug)->exists();

@@ -46,7 +46,14 @@
                                class="text-indigo-600" onchange="toggleSshFields(this.value)">
                         <span class="ml-2 text-sm text-gray-700 dark:text-gray-300">🖥️ Servidor SSH</span>
                     </label>
+                    <label class="inline-flex items-center">
+                        <input type="radio" name="service_type" value="api"
+                               {{ old('service_type') === 'api' ? 'checked' : '' }}
+                               class="text-indigo-600" onchange="toggleSshFields(this.value)">
+                        <span class="ml-2 text-sm text-gray-700 dark:text-gray-300">🔑 API (clave firmada)</span>
+                    </label>
                 </div>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">API: solo se entra con el cliente hawcert-* firmando con la clave privada del .pem; el login web con certificado no vale.</p>
             </div>
 
             {{-- SSH fields (shown only when type=ssh) --}}

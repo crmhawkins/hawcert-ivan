@@ -19,3 +19,9 @@ Route::get('/ssh/ca', [\App\Http\Controllers\Api\SshCertificateController::class
 Route::post('/ssh/challenge', [\App\Http\Controllers\Api\SshCertificateController::class, 'challenge']);
 Route::post('/ssh/issue', [\App\Http\Controllers\Api\SshCertificateController::class, 'issue']);
 Route::post('/ssh/consume', [\App\Http\Controllers\Api\SshCertificateController::class, 'consume']);
+
+// Claves de un solo uso con firma del .pem para servicios de tipo «api» (p. ej. correo-api; ver SignedKeyController)
+Route::middleware('throttle:60,1')->group(function () {
+    Route::post('/signed-key/challenge', [\App\Http\Controllers\Api\SignedKeyController::class, 'challenge']);
+    Route::post('/signed-key/issue', [\App\Http\Controllers\Api\SignedKeyController::class, 'issue']);
+});

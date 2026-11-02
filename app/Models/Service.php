@@ -28,13 +28,30 @@ class Service extends Model
         return $this->hasMany(SshAccessToken::class);
     }
 
+    /**
+     * Servicio de tipo API: solo se entra con una clave de un solo uso emitida en
+     * /api/signed-key/issue, que exige firmar un reto con la clave privada del .pem.
+     * El flujo antiguo /api/validate-access (solo certificado público) no vale para estos servicios.
+     */
+    public const TYPE_API = 'api';
+
     public function isSsh(): bool
     {
         return $this->service_type === 'ssh';
     }
 
+    public function isApi(): bool
+    {
+        return $this->service_type === self::TYPE_API;
+    }
+
     public function scopeSsh($query)
     {
         return $query->where('service_type', 'ssh');
+    }
+
+    public function scopeApi($query)
+    {
+        return $query->where('service_type', self::TYPE_API);
     }
 }

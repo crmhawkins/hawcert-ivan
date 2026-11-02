@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\AccessKey;
 use App\Models\CertificateUsageLog;
+use App\Models\Service;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -108,6 +109,31 @@ class KeyValidationController extends Controller
                     'success' => false,
                     'message' => 'El certificado asociado a esta key ya no es válido',
                 ], 403);
+            }
+
+            // Servicios de tipo «api»: la key tiene que venir del flujo firmado (/api/signed-key/issue)
+            // y el certificado tiene que seguir teniendo el permiso en este momento (quitarlo surte efecto ya).
+            $keyService = Service::where('slug', $accessKey->service_slug)->first();
+            if ($keyService && $keyService->isApi()) {
+                $issuedVia = $accessKey->metadata['issued_via'] ?? null;
+                if ($issuedVia !== SignedKeyController::ISSUED_VIA) {
+                    Log::warning('Key de servicio API no emitida por el flujo firmado', [
+                        'key_id' => $accessKey->id,
+                        'service_slug' => $accessKey->service_slug,
+                        'client_ip' => $clientIp,
+                    ]);
+
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Key no válida para este servicio: debe emitirse con firma del certificado',
+                    ], 403);
+                }
+                if (!$keyService->is_active || !$accessKey->certificate->hasService($keyService->slug)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'El certificado ya no tiene permiso para este servicio',
+                    ], 403);
+                }
             }
 
             if ($accessKey->service_slug === \App\Models\Certificate::HAWCERT_SERVICE_SLUG && !$accessKey->certificate->can_access_hawcert) {
